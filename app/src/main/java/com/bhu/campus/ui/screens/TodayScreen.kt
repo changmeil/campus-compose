@@ -112,8 +112,6 @@ fun TodayScreen(
     val weather = CampusStore.weather
     val context = LocalContext.current
     val order = arrangeOrder(settings.todayOrder, listOf("hero", "courses", "tasks", "express", "xxt"))
-    // 三个拼多多驿站靠 CampusProbe 模块改写 props.url 才能直达，没模块就别摆出来
-    val probeInstalled = remember { Express.hasProbe(context) }
     val today = LocalDate.now()
     val week = weekIndexOf(today, settings.semesterStart)
     val weekday = today.dayOfWeek.value
@@ -333,49 +331,17 @@ fun TodayScreen(
         "express" -> {
             SectionHeader("取快递")
             Card(insideMargin = CardPadding) {
-                val rows = buildList {
-                    add(
-                        ExpressAction(
-                            title = "菜鸟驿站 · 待取件",
-                            subtitle = "淘宝里的菜鸟驿站，包裹和取件码都在这",
-                            onClick = {
-                                if (!Express.openCainiao(context)) {
-                                    Toast.makeText(context, "没能打开淘宝，请确认已安装", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                        ),
-                    )
-                    if (probeInstalled) {
-                        // 装了 CampusProbe 模块才放这三个驿站，否则点进去是 404 页
-                        Express.STATIONS.forEach { station ->
-                            add(
-                                ExpressAction(
-                                    title = station.name,
-                                    subtitle = station.note,
-                                    onClick = {
-                                        if (!Express.openPddStation(context, station.code)) {
-                                            Toast.makeText(context, "没能打开拼多多，请确认已安装", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                ),
-                            )
-                        }
-                    } else {
-                        add(
-                            ExpressAction(
-                                title = "拼多多驿站 · 一点直达",
-                                subtitle = "需要 CampusProbe 模块，在 LSPosed 里启用后可用",
-                                onClick = {
-                                    Toast.makeText(
-                                        context,
-                                        "没检测到 CampusProbe 模块，去 LSPosed 里启用它",
-                                        Toast.LENGTH_LONG,
-                                    ).show()
-                                },
-                            ),
-                        )
-                    }
-                }
+                val rows = listOf(
+                    ExpressAction(
+                        title = "菜鸟驿站 · 待取件",
+                        subtitle = "淘宝里的菜鸟驿站，包裹和取件码都在这",
+                        onClick = {
+                            if (!Express.openCainiao(context)) {
+                                Toast.makeText(context, "没能打开淘宝，请确认已安装", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    ),
+                )
                 Column {
                     rows.forEachIndexed { index, row ->
                         ExpressRow(title = row.title, subtitle = row.subtitle, onClick = row.onClick)

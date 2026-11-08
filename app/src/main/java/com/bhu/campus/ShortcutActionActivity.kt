@@ -9,7 +9,7 @@ import com.bhu.campus.data.Express
 import com.bhu.campus.data.Shortcuts
 
 /**
- * 桌面长按菜单的落点。没有界面，收下参数就转给支付宝 / 拼多多，然后自己退出。
+ * 桌面长按菜单的落点。没有界面，收下参数就转给支付宝 / 淘宝，然后自己退出。
  */
 class ShortcutActionActivity : Activity() {
 
@@ -25,11 +25,6 @@ class ShortcutActionActivity : Activity() {
             Shortcuts.KIND_CAINIAO -> {
                 if (!Express.openCainiao(this)) {
                     Toast.makeText(this, "没能打开淘宝，请确认已安装", Toast.LENGTH_SHORT).show()
-                }
-            }
-            Shortcuts.KIND_STATION -> {
-                if (!key.isNullOrBlank() && !Express.openPddStation(this, key)) {
-                    Toast.makeText(this, "没能打开拼多多，请确认已安装", Toast.LENGTH_SHORT).show()
                 }
             }
         }

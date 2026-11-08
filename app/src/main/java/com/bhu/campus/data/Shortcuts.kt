@@ -14,10 +14,10 @@ import com.bhu.campus.ShortcutActionActivity
  *
  * 里面放两类东西，都能一步到位：
  *  - 存过的打水设备（点一下直接拉起支付宝进那台机器）
- *  - 三个拼多多驿站（点一下直接进那个驿站的取件页）
+ *  - 菜鸟驿站（点一下直接进「待取件」页）
  *
  * 注意系统有数量上限（[ShortcutManagerCompat.getMaxShortcutCountPerActivity]，MIUI 上通常 5 个），
- * 超了会按顺序裁掉，所以「设备在前、驿站在后」。
+ * 超了会按顺序裁掉，所以「设备在前、菜鸟在后」。
  *
  * 快捷方式本身不能带逻辑，统一跳 [ShortcutActionActivity]，由它按 kind + key 分发。
  */
@@ -30,12 +30,11 @@ object Shortcuts {
     const val EXTRA_KEY = "shortcut_key"
 
     const val KIND_WATER = "water"
-    const val KIND_STATION = "station"
     const val KIND_CAINIAO = "cainiao"
 
     /**
      * 桌面上实际只露 4 个位置（MIUI 实测：注册 5 个也只显示 4 个），
-     * 所以内容按「接水设备 → 淘宝菜鸟 → 爱邻丁香」排，超出的砍掉。
+     * 所以内容按「接水设备 → 淘宝菜鸟」排，超出的砍掉。
      */
     private const val VISIBLE_SLOTS = 4
 
@@ -73,16 +72,6 @@ object Shortcuts {
             app, "cainiao", "菜鸟驿站", "取快递 · 菜鸟驿站（淘宝）",
             KIND_CAINIAO, "", R.drawable.shortcut_cainiao,
         )
-
-        // 拼多多驿站只放最常用的那个；没装 CampusProbe 模块就跳过（点了只会是 404 页）
-        if (Express.hasProbe(app)) {
-            Express.STATIONS.firstOrNull()?.let { st ->
-                all += build(
-                    app, "station_${st.code.hashCode()}", st.short, "取快递 · ${st.name}",
-                    KIND_STATION, st.code, st.iconRes,
-                )
-            }
-        }
 
         val kept = all.take(slots)
         val dropped = all.size - kept.size

@@ -13,8 +13,8 @@ android {
         applicationId = "com.bhu.campus"
         minSdk = 26
         targetSdk = 37
-        versionCode = 68
-        versionName = "5.17"
+        versionCode = 69
+        versionName = "5.18"
     }
 
     signingConfigs {
@@ -64,8 +64,4 @@ dependencies {
     val miuix = "0.9.4"
     implementation("top.yukonga.miuix.kmp:miuix-ui:$miuix")
     implementation("top.yukonga.miuix.kmp:miuix-icons:$miuix")
-
-    // 内置的 Xposed 模块（拼多多驿站直通）。只编译期引用，运行时由 LSPosed 注入，
-    // 所以用 compileOnly —— 打进 APK 反而会和 LSPosed 的类冲突。
-    compileOnly("de.robv.android.xposed:api:82")
 }
