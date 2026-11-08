@@ -49,20 +49,6 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
-        <!-- 读打水余额：只监听支付宝，只读文本节点，不点击不注入。
-             用户在「设置 → 无障碍」里手动开启后才生效。 -->
-        <service
-            android:name=".DrinkBalanceService"
-            android:exported="true"
-            android:label="@string/drink_service_name"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service" />
-        </service>
     </application>
 
 </manifest>

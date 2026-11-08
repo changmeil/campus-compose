@@ -13,8 +13,8 @@ android {
         applicationId = "com.bhu.campus"
         minSdk = 26
         targetSdk = 37
-        versionCode = 69
-        versionName = "5.18"
+        versionCode = 70
+        versionName = "5.19"
     }
 
     signingConfigs {

@@ -109,19 +109,6 @@ fun defaultSemesterStart(): Long {
     return start.toEpochDay()
 }
 
-data class EnergySnapshot(
-    val balance: Double = 0.0,
-    val areaName: String = "",
-    val buildingNo: String = "",
-    val unitNo: String = "",
-    val roomNo: String = "",
-    val userNo: String = "",
-    val meterNo: String = "",
-    val fetchedAt: Long = 0L,
-)
-
-data class EnergyPoint(val balance: Double, val fetchedAt: Long)
-
 data class XxtState(
     val loggedIn: Boolean = false,
     val userName: String = "",
@@ -151,10 +138,6 @@ object CampusStore {
         private set
     var settings by mutableStateOf(AppSettings())
         private set
-    var energy by mutableStateOf<EnergySnapshot?>(null)
-        private set
-    var history by mutableStateOf<List<EnergyPoint>>(emptyList())
-        private set
     var xxt by mutableStateOf(XxtState())
         private set
     /** 今日天气，只用于 Compose 观察；持久化在 WeatherClient 自己的 prefs 里。 */
@@ -162,18 +145,6 @@ object CampusStore {
         private set
     /** 保存过的打水设备，最新的在最前面；点一下就能直接回到那台机器。 */
     var waterQrs by mutableStateOf<List<WaterQr>>(emptyList())
-        private set
-    /** 洗浴（智能控水）用的一卡通卡号，空着就是还没设置。 */
-    var waterCard by mutableStateOf("")
-        private set
-    /** 最近一次洗浴快照（余额 / 空位 / 扣费记录）。 */
-    var bath by mutableStateOf<WaterSnapshot?>(null)
-        private set
-    /** 社慧通账户里的打水余额，靠无障碍读小程序首页那个数字拿到；null 表示还没读到过。 */
-    var drinkBalance by mutableStateOf<Double?>(null)
-        private set
-    /** 上面那个余额是什么时候读到的。 */
-    var drinkBalanceAt by mutableStateOf(0L)
         private set
 
     fun init(context: Context) {
@@ -192,163 +163,12 @@ object CampusStore {
         courses = decodeCourses(prefs.getString("courses", null))
         tasks = decodeTasks(prefs.getString("tasks", null))
         settings = decodeSettings(prefs.getString("settings", null))
-        energy = decodeEnergy(prefs.getString("energy", null))
-        history = decodeHistory(prefs.getString("history", null))
         xxt = decodeXxt(prefs.getString("xxt", null))
         val stored = decodeWaterQrs(prefs.getString("waterQrs", null))
         // 老版本只存了一条 waterQr，这里把它升级成第一台预设（先赋值再落盘，别把老数据写没了）
         val legacy = if (stored.isEmpty()) decodeLegacyWaterQr() else null
         waterQrs = stored.ifEmpty { listOfNotNull(legacy) }
         if (legacy != null) persistWaterQrs()
-        waterCard = prefs.getString("waterCard", "").orEmpty()
-        bath = decodeBath(prefs.getString("bath", null))
-        drinkBalance = prefs.getString("drinkBalance", null)?.toDoubleOrNull()
-        drinkBalanceAt = prefs.getLong("drinkBalanceAt", 0L)
-    }
-
-    /* ---------------- 打水余额（无障碍读屏） ---------------- */
-
-    /**
-     * 无障碍服务在社慧通小程序首页读到余额后调这里。
-     *
-     * 读数相同就不重复落盘，避免小程序页面每次重绘都写一遍。
-     */
-    fun recordDrinkBalance(value: Double): Boolean {
-        if (value < 0) return false
-        val current = drinkBalance
-        // 一分钟内读到同一个数就不重复落盘；小程序页面每次重绘都会来一遍
-        if (current != null && kotlin.math.abs(current - value) < 0.005 &&
-            System.currentTimeMillis() - drinkBalanceAt < 60_000
-        ) {
-            return false
-        }
-        drinkBalance = value
-        drinkBalanceAt = System.currentTimeMillis()
-        prefs.edit()
-            .putString("drinkBalance", value.toString())
-            .putLong("drinkBalanceAt", drinkBalanceAt)
-            .apply()
-        return true
-    }
-
-    /** 清掉读到的余额（换账号或数据可疑时用）。 */
-    fun clearDrinkBalance() {
-        drinkBalance = null
-        drinkBalanceAt = 0L
-        prefs.edit().remove("drinkBalance").remove("drinkBalanceAt").apply()
-    }
-
-    /* ---------------- 洗浴 ---------------- */
-
-    fun saveWaterCard(card: String) {
-        val value = card.trim()
-        waterCard = value
-        if (value.isEmpty()) {
-            bath = null
-            prefs.edit().remove("waterCard").remove("bath").apply()
-        } else {
-            prefs.edit().putString("waterCard", value).apply()
-        }
-    }
-
-    fun recordBath(snapshot: WaterSnapshot) {
-        bath = snapshot
-        prefs.edit().putString("bath", encodeBath(snapshot)).apply()
-    }
-
-    /** 预约/取消之后本地立刻改掉对应的行，不用再打一次网络。同一时间只可能有一张预约。 */
-    fun patchBathClass(classNo: Int, booked: Boolean, code: String) {
-        val current = bath ?: return
-        val patched = current.copy(
-            classes = current.classes.map {
-                when {
-                    it.no == classNo -> it.copy(booked = booked, bookCode = code)
-                    booked -> it.copy(booked = false, bookCode = "")
-                    else -> it
-                }
-            },
-        )
-        recordBath(patched)
-    }
-
-    private fun encodeBath(s: WaterSnapshot): String {
-        val records = JSONArray()
-        s.records.take(30).forEach {
-            records.put(
-                JSONObject()
-                    .put("posNo", it.posNo)
-                    .put("zone", it.zone)
-                    .put("time", it.time)
-                    .put("money", it.money)
-                    .put("balance", it.balance),
-            )
-        }
-        val classes = JSONArray()
-        s.classes.forEach {
-            classes.put(
-                JSONObject()
-                    .put("no", it.no)
-                    .put("name", it.name)
-                    .put("posNum", it.posNum)
-                    .put("free", it.free)
-                    .put("freeRate", it.freeRate)
-                    .put("bookRate", it.bookRate)
-                    .put("booked", it.booked)
-                    .put("bookCode", it.bookCode),
-            )
-        }
-        return JSONObject()
-            .put("card", s.card)
-            .put("balance", s.balance)
-            .put("quota", s.quota)
-            .put("records", records)
-            .put("classes", classes)
-            .put("fetchedAt", s.fetchedAt)
-            .toString()
-    }
-
-    private fun decodeBath(raw: String?): WaterSnapshot? {
-        if (raw.isNullOrBlank()) return null
-        return runCatching {
-            val o = JSONObject(raw)
-            val records = ArrayList<WaterCost>()
-            o.optJSONArray("records")?.let { arr ->
-                for (i in 0 until arr.length()) {
-                    val item = arr.optJSONObject(i) ?: continue
-                    records += WaterCost(
-                        posNo = item.optInt("posNo"),
-                        zone = item.optString("zone"),
-                        time = item.optString("time"),
-                        money = item.optDouble("money"),
-                        balance = item.optDouble("balance"),
-                    )
-                }
-            }
-            val classes = ArrayList<WaterClass>()
-            o.optJSONArray("classes")?.let { arr ->
-                for (i in 0 until arr.length()) {
-                    val item = arr.optJSONObject(i) ?: continue
-                    classes += WaterClass(
-                        no = item.optInt("no"),
-                        name = item.optString("name"),
-                        posNum = item.optInt("posNum"),
-                        free = item.optInt("free"),
-                        freeRate = item.optInt("freeRate"),
-                        bookRate = item.optInt("bookRate"),
-                        booked = item.optBoolean("booked"),
-                        bookCode = item.optString("bookCode"),
-                    )
-                }
-            }
-            WaterSnapshot(
-                card = o.optString("card"),
-                balance = o.optDouble("balance"),
-                quota = o.optDouble("quota"),
-                classes = classes,
-                records = records,
-                fetchedAt = o.optLong("fetchedAt"),
-            )
-        }.getOrNull()
     }
 
     private fun decodeLegacyWaterQr(): WaterQr? = runCatching {
@@ -445,8 +265,6 @@ object CampusStore {
             .putString("courses", encodeCourses(courses))
             .putString("tasks", encodeTasks(tasks))
             .putString("settings", encodeSettings(settings))
-            .putString("energy", energy?.let(::encodeEnergy))
-            .putString("history", encodeHistory(history))
             .putString("xxt", encodeXxt(xxt))
             .apply()
     }
@@ -497,24 +315,6 @@ object CampusStore {
         persist()
     }
 
-    /* ---------------- 电费 ---------------- */
-
-    fun recordEnergy(snapshot: EnergySnapshot) {
-        energy = snapshot
-        val point = EnergyPoint(snapshot.balance, snapshot.fetchedAt)
-        history = (history.filterNot {
-            sameDay(it.fetchedAt, snapshot.fetchedAt)
-        } + point).sortedBy { it.fetchedAt }.takeLast(400)
-        persist()
-    }
-
-    private fun sameDay(a: Long, b: Long): Boolean {
-        val zone = ZoneId.systemDefault()
-        val da = Instant.ofEpochMilli(a).atZone(zone).toLocalDate()
-        val db = Instant.ofEpochMilli(b).atZone(zone).toLocalDate()
-        return da == db
-    }
-
     /* ---------------- 学习通同步写入 ---------------- */
 
     fun replaceSyncedCourses(list: List<Course>) {
@@ -547,8 +347,6 @@ object CampusStore {
     fun clearAll() {
         courses = emptyList()
         tasks = emptyList()
-        energy = null
-        history = emptyList()
         xxt = XxtState()
         settings = AppSettings()
         persist()
@@ -690,53 +488,6 @@ object CampusStore {
         return (0 until array.length()).mapNotNull {
             array.optString(it).takeIf { s -> s.isNotBlank() }
         }
-    }
-
-    private fun encodeEnergy(s: EnergySnapshot): String = JSONObject()
-        .put("balance", s.balance)
-        .put("areaName", s.areaName)
-        .put("buildingNo", s.buildingNo)
-        .put("unitNo", s.unitNo)
-        .put("roomNo", s.roomNo)
-        .put("userNo", s.userNo)
-        .put("meterNo", s.meterNo)
-        .put("fetchedAt", s.fetchedAt)
-        .toString()
-
-    private fun decodeEnergy(raw: String?): EnergySnapshot? {
-        if (raw.isNullOrBlank()) return null
-        return runCatching {
-            val o = JSONObject(raw)
-            EnergySnapshot(
-                balance = o.optDouble("balance", 0.0),
-                areaName = o.optString("areaName"),
-                buildingNo = o.optString("buildingNo"),
-                unitNo = o.optString("unitNo"),
-                roomNo = o.optString("roomNo"),
-                userNo = o.optString("userNo"),
-                meterNo = o.optString("meterNo"),
-                fetchedAt = o.optLong("fetchedAt"),
-            )
-        }.getOrNull()
-    }
-
-    private fun encodeHistory(list: List<EnergyPoint>): String {
-        val arr = JSONArray()
-        list.forEach {
-            arr.put(JSONObject().put("b", it.balance).put("t", it.fetchedAt))
-        }
-        return arr.toString()
-    }
-
-    private fun decodeHistory(raw: String?): List<EnergyPoint> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return runCatching {
-            val arr = JSONArray(raw)
-            (0 until arr.length()).mapNotNull { i ->
-                val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                EnergyPoint(o.optDouble("b"), o.optLong("t"))
-            }
-        }.getOrDefault(emptyList())
     }
 
     private fun encodeXxt(s: XxtState): String = JSONObject()

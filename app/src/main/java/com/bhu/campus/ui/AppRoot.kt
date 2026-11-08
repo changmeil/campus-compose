@@ -58,7 +58,6 @@ import com.bhu.campus.ChaoxingLoginActivity
 import com.bhu.campus.data.CampusStore
 import com.bhu.campus.data.ChaoxingClient
 import com.bhu.campus.data.Course
-import com.bhu.campus.data.EnergySync
 import com.bhu.campus.data.TaskItem
 import com.bhu.campus.data.WeatherClient
 import com.bhu.campus.ui.screens.EnergyScreen
@@ -121,41 +120,9 @@ fun CampusApp() {
 
     var syncing by remember { mutableStateOf(false) }
     var syncText by remember { mutableStateOf("") }
-    var energyRefreshing by remember { mutableStateOf(false) }
 
     fun toast(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-    }
-
-    fun refreshEnergy(silent: Boolean = false) {
-        if (energyRefreshing) return
-        if (!EnergySync.isConfigured()) {
-            if (!silent) {
-                if (showEnergy) {
-                    toast("先填好楼号和房间号")
-                    goToPage(3)
-                } else {
-                    toast("设置里开启「显示宿舍电费」后才能查询")
-                }
-            }
-            return
-        }
-        energyRefreshing = true
-        scope.launch {
-            runCatching { EnergySync.refresh() }
-                .onSuccess {
-                    if (!silent) toast("余额 ¥" + String.format("%.2f", it.balance))
-                }
-                .onFailure {
-                    if (!silent) toast("电费查询失败：${it.message ?: "未知错误"}")
-                }
-            energyRefreshing = false
-        }
-    }
-
-    // 电费：超过 2 小时没查过就自动查一次（未配置或关掉电费会自动跳过）
-    LaunchedEffect(Unit) {
-        runCatching { EnergySync.autoIfStale(STALE_MS) }
     }
 
     /**
