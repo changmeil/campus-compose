@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只监听支付宝（社慧通小程序跑在它里面），事件类型只留窗口切换与内容变化。
+  canRetrieveWindowContent 必须为 true，否则拿不到节点文字。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/drink_service_desc"
+    android:notificationTimeout="300"
+    android:packageNames="com.eg.android.AlipayGphone"
+    android:settingsActivity="com.bhu.campus.MainActivity" />

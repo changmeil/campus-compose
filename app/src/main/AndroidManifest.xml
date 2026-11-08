@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 天气按当前位置查；只要粗略定位，够用且省电 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- 唤起支付宝小程序（社慧通生活服务）需要能看见支付宝这个包 -->
+    <queries>
+        <package android:name="com.eg.android.AlipayGphone" />
+        <package android:name="com.taobao.taobao" />
+        <package android:name="com.xunmeng.pinduoduo" />
+        <!-- 驿站直通模块：判断有没有装 -->
+        <package android:name="com.bhu.campusprobe" />
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Campus"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ChaoxingLoginActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:label="@string/xxt_login"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 桌面长按菜单的落点：无界面，转手给支付宝/拼多多就退出 -->
+        <activity
+            android:name=".ShortcutActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- 读打水余额：只监听支付宝，只读文本节点，不点击不注入。
+             用户在「设置 → 无障碍」里手动开启后才生效。 -->
+        <service
+            android:name=".DrinkBalanceService"
+            android:exported="true"
+            android:label="@string/drink_service_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
+        </service>
+
+        <!-- 内置 Xposed 模块：LSPosed 里勾选「校园一站」，作用域勾「拼多多」。
+             实现在 com.bhu.campus.hook.PddStationHook（assets/xposed_init 指向它），
+             只在拼多多进程里被加载，主界面不受影响。 -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="拼多多驿站取件页直通：在「校园一站」点驿站，直接落到该驿站的取件页" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+    </application>
+
+</manifest>

@@ -1,0 +1,34 @@
+# ---- 构建产物 ----
+build/
+app/build/
+.gradle/
+.kotlin/
+dist/
+*.apk
+*.aab
+*.dex
+
+# ---- 本机工具链（tools 是 309MB 的 gradle 发行包，android-sdk 303MB，都不该进仓库）----
+tools/
+android-sdk/
+
+# ---- 本机配置（含 SDK 绝对路径，换台机器就失效）----
+local.properties
+
+# ---- 运行期临时文件 ----
+tmp/
+.probe/
+shots/
+shot-*.png
+*.log
+*.hprof
+
+# ---- 编辑器 / 系统 ----
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 注意：keystore/campus.jks 是故意提交的——签名密钥一旦丢了两台手机都得卸载重装，
+# 而且以后 OTA 升级要求签名一致。如果哪天要推到 GitHub，先把这行取消注释。
+# keystore/

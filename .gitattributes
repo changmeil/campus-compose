@@ -1,0 +1,18 @@
+# 默认按内容自动判断文本，入库统一 LF
+* text=auto
+
+# 脚本的行尾必须固定：build.sh 带 CRLF 会报 "bad interpreter: /bin/bash^M"
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+gradlew text eol=lf
+
+# 二进制，别让 git 试图转换或做 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.apk binary
+*.jar binary
+*.jks binary
+*.zip binary

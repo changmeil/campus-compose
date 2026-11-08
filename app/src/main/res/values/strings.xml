@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">校园一站</string>
+    <string name="xxt_login">登录学习通</string>
+    <!-- 无障碍服务在系统设置里的名字与说明 -->
+    <string name="drink_service_name">校园一站 · 打水余额</string>
+    <string name="drink_service_desc">只在支付宝「社慧通」小程序页面读取余额数字，用于「余额」页显示打水余额。不读取输入框、聊天或其它页面的内容。</string>
+    <!-- 通知使用权里的名字 -->
+    <string name="sms_service_name">校园一站 · 话费短信</string>
+</resources>
