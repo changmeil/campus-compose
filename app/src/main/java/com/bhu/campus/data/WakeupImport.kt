@@ -127,7 +127,9 @@ object WakeupImport {
 
             val day = start.dayOfWeek.value
             val startIdx = sectionOf(start.toLocalTime())
-            val endIdx = ev.end?.let { sectionOf(it.toLocalTime()) } ?: startIdx
+            // 结束时间要跟「节的结束时间」比，不能跟下一节的开始时间比：
+            // 09:40 离第 3 节的 10:00 只有 20 分钟，但离第 2 节的下课时间正好 0，那才是对的。
+            val endIdx = ev.end?.let { sectionEndOf(it.toLocalTime()) } ?: startIdx
             val s = minOf(startIdx, endIdx)
             val e = maxOf(startIdx, endIdx)
 
@@ -286,6 +288,20 @@ object WakeupImport {
         var bestDiff = Long.MAX_VALUE
         DEFAULT_SECTION_TIMES.forEachIndexed { index, pair ->
             val diff = abs(ChronoUnit.MINUTES.between(time, pair.first))
+            if (diff < bestDiff) {
+                bestDiff = diff
+                best = index + 1
+            }
+        }
+        return best.coerceIn(1, DEFAULT_SECTION_TIMES.size)
+    }
+
+    /** 按结束时间找它对的是第几节的下课时间。 */
+    private fun sectionEndOf(time: java.time.LocalTime): Int {
+        var best = 1
+        var bestDiff = Long.MAX_VALUE
+        DEFAULT_SECTION_TIMES.forEachIndexed { index, pair ->
+            val diff = abs(ChronoUnit.MINUTES.between(time, pair.second))
             if (diff < bestDiff) {
                 bestDiff = diff
                 best = index + 1
