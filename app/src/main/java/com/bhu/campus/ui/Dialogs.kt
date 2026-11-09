@@ -75,7 +75,12 @@ fun CourseDialog(
     var start by remember { mutableIntStateOf(course?.start ?: defaultStart) }
     var end by remember { mutableIntStateOf(course?.end ?: defaultStart) }
     var weeksText by remember {
-        mutableStateOf(course?.weeks?.let { compressWeeks(it) } ?: "1-16")
+        // 兜底：万一周次数据有奇怪的组合，也不让整个对话框崩掉
+        mutableStateOf(
+            course?.weeks?.let { runCatching { compressWeeks(it) }.getOrDefault("") }
+                ?.takeIf { it.isNotBlank() }
+                ?: "1-16"
+        )
     }
     var color by remember { mutableIntStateOf(course?.color ?: 1) }
     val weeks = expandWeeks(weeksText)
