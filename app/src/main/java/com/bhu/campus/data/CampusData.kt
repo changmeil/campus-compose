@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
 import java.util.UUID
 
@@ -16,6 +17,10 @@ const val SOURCE_MANUAL = "manual"
 const val SOURCE_XXT = "chaoxing"
 const val SOURCE_DEMO = "demo"
 const val SOURCE_WAKEUP = "wakeup"
+
+/** 课表来源：学习通同步 / WakeUp 导入。 */
+const val SCHEDULE_XXT = "chaoxing"
+const val SCHEDULE_WAKEUP = "wakeup"
 
 /**
  * 一台打水设备的二维码（简称「预设」）。
@@ -91,7 +96,22 @@ data class AppSettings(
     val todayOrder: List<String> = emptyList(),
     /** 余额页卡片的顺序，同上。 */
     val energyOrder: List<String> = emptyList(),
-)
+    /**
+     * 课表从哪儿来：学习通同步，还是 WakeUp 导入（见 [SCHEDULE_XXT] / [SCHEDULE_WAKEUP]）。
+     * 决定今日页和课程表页上那个主入口按钮是「同步」还是「导入」。
+     */
+    val scheduleSource: String = SCHEDULE_XXT,
+    /**
+     * 自定义节次作息，每项 "HH:mm-HH:mm"，下标 0 就是第 1 节。
+     * 空表示用 [DEFAULT_SECTION_TIMES]；导入 WakeUp 时按 ICS 里的真实时间自动校准。
+     */
+    val sectionTimes: List<String> = emptyList(),
+) {
+    /** 实际生效的作息表（总是 12 项）。 */
+    val effectiveSectionTimes: List<Pair<LocalTime, LocalTime>>
+        get() = sectionTimesFromStored(sectionTimes)
+}
+
 
 /** 按用户存的顺序排：丢掉已经不存在的 key，新加的接在后面。 */
 fun arrangeOrder(saved: List<String>, defaults: List<String>): List<String> {
@@ -292,12 +312,27 @@ object CampusStore {
      *
      * @param replace true 覆盖现有课表，false 追加在后面
      * @param firstMonday 课表第一周的周一（epochDay），用来校准「学期起始日」；null 表示不动
+     * @param sectionTimes 从 ICS 里推断出来的节次作息；空表示沿用当前作息
      */
-    fun importCourses(imported: List<Course>, firstMonday: Long?, replace: Boolean) {
+    fun importCourses(
+        imported: List<Course>,
+        firstMonday: Long?,
+        replace: Boolean,
+        sectionTimes: List<Pair<LocalTime, LocalTime>> = emptyList(),
+    ) {
         courses = if (replace) imported else courses + imported
-        if (firstMonday != null) {
-            settings = settings.copy(semesterStart = firstMonday)
-        }
+        settings = settings.copy(
+            semesterStart = firstMonday ?: settings.semesterStart,
+            sectionTimes = if (sectionTimes.isNotEmpty()) encodeSectionTimes(sectionTimes)
+            else settings.sectionTimes,
+            scheduleSource = SCHEDULE_WAKEUP,
+        )
+        persist()
+    }
+
+    /** 把节次作息恢复成默认的 12 节。 */
+    fun resetSectionTimes() {
+        settings = settings.copy(sectionTimes = emptyList())
         persist()
     }
 
@@ -477,6 +512,8 @@ object CampusStore {
         .put("showEnergy", s.showEnergy)
         .put("todayOrder", JSONArray(s.todayOrder))
         .put("energyOrder", JSONArray(s.energyOrder))
+        .put("scheduleSource", s.scheduleSource)
+        .put("sectionTimes", JSONArray(s.sectionTimes))
         .toString()
 
     private fun decodeSettings(raw: String?): AppSettings {
@@ -494,6 +531,11 @@ object CampusStore {
                 showEnergy = o.optBoolean("showEnergy", true),
                 todayOrder = stringList(o.optJSONArray("todayOrder")),
                 energyOrder = stringList(o.optJSONArray("energyOrder")),
+                scheduleSource = when (o.optString("scheduleSource")) {
+                    SCHEDULE_WAKEUP -> SCHEDULE_WAKEUP
+                    else -> SCHEDULE_XXT
+                },
+                sectionTimes = stringList(o.optJSONArray("sectionTimes")),
             )
         }.getOrDefault(AppSettings())
     }

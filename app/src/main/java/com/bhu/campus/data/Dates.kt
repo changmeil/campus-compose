@@ -27,6 +27,36 @@ val DEFAULT_SECTION_TIMES: List<Pair<LocalTime, LocalTime>> = listOf(
 
 val WEEKDAY_LABELS = listOf("一", "二", "三", "四", "五", "六", "日")
 
+/** 课表格子固定 12 行，作息表也按 12 节算。 */
+const val SECTION_COUNT = 12
+
+/**
+ * 把设置里存的 "HH:mm-HH:mm" 解析成作息表。
+ *
+ * 存的是字符串而不是对象，是为了跟着 SharedPreferences 的 JSON 走，
+ * 也方便以后手工改。缺项、坏项一律回落到默认作息，保证长度永远是 12。
+ */
+fun sectionTimesFromStored(stored: List<String>): List<Pair<LocalTime, LocalTime>> {
+    if (stored.isEmpty()) return DEFAULT_SECTION_TIMES
+    val parsed = stored.map { raw ->
+        val from = raw.substringBefore('-').trim()
+        val to = raw.substringAfter('-', "").trim()
+        runCatching { LocalTime.parse(from) to LocalTime.parse(to) }.getOrNull()
+            ?.takeIf { it.second.isAfter(it.first) }
+    }
+    if (parsed.all { it == null }) return DEFAULT_SECTION_TIMES
+    return DEFAULT_SECTION_TIMES.mapIndexed { i, def -> parsed.getOrNull(i) ?: def }
+}
+
+fun encodeSectionTimes(times: List<Pair<LocalTime, LocalTime>>): List<String> =
+    times.map { (from, to) ->
+        String.format("%02d:%02d-%02d:%02d", from.hour, from.minute, to.hour, to.minute)
+    }
+
+/** 08:05 这种展示用格式。 */
+fun LocalTime.hhmm(): String = String.format("%02d:%02d", hour, minute)
+
+
 private val zone: ZoneId get() = ZoneId.systemDefault()
 
 fun LocalDate.toEpochMillis(time: LocalTime = LocalTime.MIDNIGHT): Long =
@@ -99,22 +129,34 @@ fun expandWeeks(text: String): List<Int> {
     return out.distinct().sorted()
 }
 
+/**
+ * 把周次列表压成「1-16」「1,3,5-9」这种文本。
+ *
+ * 注意：这里必须先把「当前区间」攒出来再吐出去，不能像老版本那样
+ * 每遇到一个连续数字就去改上一次的输出——老写法在第一个数就连续时
+ * （比如 1..16）会对空列表 removeAt(-1)，直接 IndexOutOfBounds 崩掉。
+ */
 fun compressWeeks(weeks: List<Int>): String {
     if (weeks.isEmpty()) return ""
     val sorted = weeks.distinct().sorted()
     val out = mutableListOf<String>()
     var start = sorted.first()
     var prev = start
+
+    fun flush() {
+        out += if (start == prev) start.toString() else "$start-$prev"
+    }
+
     for (w in sorted.drop(1)) {
         if (w == prev + 1) {
-            out.removeAt(out.size - 1)
-            out.add("$start-$w")
+            prev = w
         } else {
+            flush()
             start = w
-            out.add(w.toString())
+            prev = w
         }
-        prev = w
     }
+    flush()
     return out.joinToString(",")
 }
 
