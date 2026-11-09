@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
 import java.util.UUID
 
@@ -16,6 +17,10 @@ const val SOURCE_MANUAL = "manual"
 const val SOURCE_XXT = "chaoxing"
 const val SOURCE_DEMO = "demo"
 const val SOURCE_WAKEUP = "wakeup"
+
+/** 课表来源：学习通同步 / WakeUp 导入。 */
+const val SCHEDULE_XXT = "chaoxing"
+const val SCHEDULE_WAKEUP = "wakeup"
 
 /**
  * 一台打水设备的二维码（简称「预设」）。
@@ -91,7 +96,21 @@ data class AppSettings(
     val todayOrder: List<String> = emptyList(),
     /** 余额页卡片的顺序，同上。 */
     val energyOrder: List<String> = emptyList(),
-)
+    /**
+     * 课表从哪儿来：学习通同步，还是 WakeUp 导入（见 [SCHEDULE_XXT] / [SCHEDULE_WAKEUP]）。
+     * 决定今日页和课程表页上那个主入口按钮是「同步」还是「导入」。
+     */
+    val scheduleSource: String = SCHEDULE_XXT,
+    /**
+     * 自定义节次作息，每项 "HH:mm-HH:mm"，下标 0 就是第 1 节。
+     * 空表示用 [DEFAULT_SECTION_TIMES]；导入 WakeUp 时按 ICS 里的真实时间自动校准。
+     */
+    val sectionTimes: List<String> = emptyList(),
+) {
+    /** 实际生效的作息表（总是 12 项）。 */
+    val effectiveSectionTimes: List<Pair<LocalTime, LocalTime>>
+        get() = sectionTimesFromStored(sectionTimes)
+}
 
 /** 按用户存的顺序排：丢掉已经不存在的 key，新加的接在后面。 */
 fun arrangeOrder(saved: List<String>, defaults: List<String>): List<String> {
@@ -190,7 +209,9 @@ object CampusStore {
     }
 
     private fun load() {
-        courses = decodeCourses(prefs.getString("courses", null))
+        val rawCourses = decodeCourses(prefs.getString("courses", null))
+        val mergedCourses = mergeDuplicateCourses(rawCourses)
+        courses = mergedCourses
         tasks = decodeTasks(prefs.getString("tasks", null))
         settings = decodeSettings(prefs.getString("settings", null))
         energy = decodeEnergy(prefs.getString("energy", null))
@@ -205,6 +226,9 @@ object CampusStore {
         bath = decodeBath(prefs.getString("bath", null))
         drinkBalance = prefs.getString("drinkBalance", null)?.toDoubleOrNull()
         drinkBalanceAt = prefs.getLong("drinkBalanceAt", 0L)
+        // 老版本导入把教室带进了合并键，同一门课会裂成两条；这里在读盘时兜一次底，
+        // 用户不用重新导入也能看到干净的今日页。
+        if (mergedCourses != rawCourses) persist()
     }
 
     /* ---------------- 打水余额（无障碍读屏） ---------------- */
@@ -470,16 +494,62 @@ object CampusStore {
     }
 
     /**
+     * 同名、同老师、同节次的课并成一条：周次取并集，教室拼起来（最多两个）。
+     *
+     * 起因是导入 WakeUp 的 ICS 时把教室带进了合并键，教务里同一门课挂了两间教室
+     * （或换过教室）就会裂成两条——课表格子里两个块完全叠住，只露出上面那条，
+     * 今日页却会把两条都列出来，看着像"今天上了两遍同一门课"。
+     */
+    private fun mergeDuplicateCourses(list: List<Course>): List<Course> {
+        val out = LinkedHashMap<String, Course>()
+        list.forEach { raw ->
+            // 顺手把老数据里「教室 老师」这种脏地点洗干净
+            val course = raw.copy(location = WakeupImport.stripTeacher(raw.location, raw.teacher))
+            val key = "${course.name}|${course.teacher}|${course.weekday}|${course.start}|${course.end}"
+            val old = out[key]
+            out[key] = if (old == null) {
+                course
+            } else {
+                val places = (old.location.split(" / ") + course.location)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .take(2)
+                old.copy(
+                    weeks = (old.weeks + course.weeks).distinct().sorted(),
+                    location = places.joinToString(" / "),
+                )
+            }
+        }
+        return out.values.toList()
+    }
+
+    /**
      * 从 WakeUp 导入课表。
      *
      * @param replace true 覆盖现有课表，false 追加在后面
      * @param firstMonday 课表第一周的周一（epochDay），用来校准「学期起始日」；null 表示不动
+     * @param sectionTimes 从 ICS 里推断出来的节次作息；空表示沿用当前作息
      */
-    fun importCourses(imported: List<Course>, firstMonday: Long?, replace: Boolean) {
+    fun importCourses(
+        imported: List<Course>,
+        firstMonday: Long?,
+        replace: Boolean,
+        sectionTimes: List<Pair<LocalTime, LocalTime>> = emptyList(),
+    ) {
         courses = if (replace) imported else courses + imported
-        if (firstMonday != null) {
-            settings = settings.copy(semesterStart = firstMonday)
-        }
+        settings = settings.copy(
+            semesterStart = firstMonday ?: settings.semesterStart,
+            sectionTimes = if (sectionTimes.isNotEmpty()) encodeSectionTimes(sectionTimes)
+            else settings.sectionTimes,
+            scheduleSource = SCHEDULE_WAKEUP,
+        )
+        persist()
+    }
+
+    /** 把节次作息恢复成默认的 12 节。 */
+    fun resetSectionTimes() {
+        settings = settings.copy(sectionTimes = emptyList())
         persist()
     }
 
@@ -679,6 +749,8 @@ object CampusStore {
         .put("showEnergy", s.showEnergy)
         .put("todayOrder", JSONArray(s.todayOrder))
         .put("energyOrder", JSONArray(s.energyOrder))
+        .put("scheduleSource", s.scheduleSource)
+        .put("sectionTimes", JSONArray(s.sectionTimes))
         .toString()
 
     private fun decodeSettings(raw: String?): AppSettings {
@@ -696,6 +768,11 @@ object CampusStore {
                 showEnergy = o.optBoolean("showEnergy", true),
                 todayOrder = stringList(o.optJSONArray("todayOrder")),
                 energyOrder = stringList(o.optJSONArray("energyOrder")),
+                scheduleSource = when (o.optString("scheduleSource")) {
+                    SCHEDULE_WAKEUP -> SCHEDULE_WAKEUP
+                    else -> SCHEDULE_XXT
+                },
+                sectionTimes = stringList(o.optJSONArray("sectionTimes")),
             )
         }.getOrDefault(AppSettings())
     }

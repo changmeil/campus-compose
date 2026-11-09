@@ -27,6 +27,35 @@ val DEFAULT_SECTION_TIMES: List<Pair<LocalTime, LocalTime>> = listOf(
 
 val WEEKDAY_LABELS = listOf("一", "二", "三", "四", "五", "六", "日")
 
+/** 课表格子固定 12 行，作息表也按 12 节算。 */
+const val SECTION_COUNT = 12
+
+/**
+ * 把设置里存的 "HH:mm-HH:mm" 解析成作息表。
+ *
+ * 存的是字符串而不是对象，是为了跟着 SharedPreferences 的 JSON 走，
+ * 也方便以后手工改。缺项、坏项一律回落到默认作息，保证长度永远是 12。
+ */
+fun sectionTimesFromStored(stored: List<String>): List<Pair<LocalTime, LocalTime>> {
+    if (stored.isEmpty()) return DEFAULT_SECTION_TIMES
+    val parsed = stored.map { raw ->
+        val from = raw.substringBefore('-').trim()
+        val to = raw.substringAfter('-', "").trim()
+        runCatching { LocalTime.parse(from) to LocalTime.parse(to) }.getOrNull()
+            ?.takeIf { it.second.isAfter(it.first) }
+    }
+    if (parsed.all { it == null }) return DEFAULT_SECTION_TIMES
+    return DEFAULT_SECTION_TIMES.mapIndexed { i, def -> parsed.getOrNull(i) ?: def }
+}
+
+fun encodeSectionTimes(times: List<Pair<LocalTime, LocalTime>>): List<String> =
+    times.map { (from, to) ->
+        String.format("%02d:%02d-%02d:%02d", from.hour, from.minute, to.hour, to.minute)
+    }
+
+/** 08:05 这种展示用格式。 */
+fun LocalTime.hhmm(): String = String.format("%02d:%02d", hour, minute)
+
 private val zone: ZoneId get() = ZoneId.systemDefault()
 
 fun LocalDate.toEpochMillis(time: LocalTime = LocalTime.MIDNIGHT): Long =

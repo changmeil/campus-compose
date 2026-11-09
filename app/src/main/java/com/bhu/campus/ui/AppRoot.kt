@@ -342,6 +342,7 @@ fun CampusApp() {
                                 android.content.Intent(context, ChaoxingLoginActivity::class.java)
                             )
                         },
+                        onImportWakeup = { showImport = true },
                         syncing = syncing,
                     )
 
@@ -358,6 +359,7 @@ fun CampusApp() {
                             showCourseDialog = true
                         },
                         onImport = { showImport = true },
+                        onSync = { startSync() },
                     )
 
                     2 -> TasksScreen(
@@ -422,12 +424,14 @@ fun CampusApp() {
         if (showImport) {
             WakeupImportDialog(
                 onDismiss = { showImport = false },
-                onImport = { list, monday, replace ->
-                    CampusStore.importCourses(list, monday, replace)
+                onImport = { list, monday, times, replace ->
+                    CampusStore.importCourses(list, monday, replace, times)
                     showImport = false
-                    toast(
-                        "已导入 ${list.size} 门课" + if (replace) "（覆盖原课表）" else "（追加）"
-                    )
+                    val suffix = buildString {
+                        append(if (replace) "（覆盖原课表）" else "（追加）")
+                        if (times.isNotEmpty()) append("，已同步作息时间")
+                    }
+                    toast("已导入 ${list.size} 门课$suffix")
                 },
             )
         }
@@ -464,6 +468,7 @@ fun CampusApp() {
                     showSettings = false
                     toast("数据已清空")
                 },
+                onResetSectionTimes = { CampusStore.resetSectionTimes() },
             )
         }
         }

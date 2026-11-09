@@ -43,10 +43,11 @@ import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Tasks
 import top.yukonga.miuix.kmp.icon.extended.Update
+import top.yukonga.miuix.kmp.icon.extended.Weeks
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.bhu.campus.data.CampusStore
 import com.bhu.campus.data.arrangeOrder
-import com.bhu.campus.data.DEFAULT_SECTION_TIMES
+import com.bhu.campus.data.SCHEDULE_WAKEUP
 import com.bhu.campus.data.Express
 import com.bhu.campus.data.Tone
 import com.bhu.campus.data.WeatherInfo
@@ -103,6 +104,7 @@ fun TodayScreen(
     onOpenTasks: () -> Unit,
     onSyncXxt: () -> Unit,
     onLoginXxt: () -> Unit,
+    onImportWakeup: () -> Unit,
     syncing: Boolean,
 ) {
     val courses = CampusStore.courses
@@ -111,6 +113,9 @@ fun TodayScreen(
     val xxt = CampusStore.xxt
     val weather = CampusStore.weather
     val context = LocalContext.current
+    // 作息跟着设置走，导入 WakeUp 后会变成学校真实的那份
+    val sectionTimes = remember(settings.sectionTimes) { settings.effectiveSectionTimes }
+    val wakeupSource = settings.scheduleSource == SCHEDULE_WAKEUP
     val order = arrangeOrder(settings.todayOrder, listOf("hero", "courses", "tasks", "express", "xxt"))
     // 三个拼多多驿站靠 CampusProbe 模块改写 props.url 才能直达，没模块就别摆出来
     val probeInstalled = remember { Express.hasProbe(context) }
@@ -199,8 +204,8 @@ fun TodayScreen(
                 } else {
                     todayCourses.forEachIndexed { index, course ->
                         if (index > 0) HorizontalDivider()
-                        val startTime = DEFAULT_SECTION_TIMES.getOrNull(course.start - 1)?.first
-                        val endTime = DEFAULT_SECTION_TIMES.getOrNull(course.end - 1)?.second
+                        val startTime = sectionTimes.getOrNull(course.start - 1)?.first
+                        val endTime = sectionTimes.getOrNull(course.end - 1)?.second
                         val isNow = startTime != null && endTime != null &&
                             !now.isBefore(startTime) && !now.isAfter(endTime)
                         val isPast = endTime != null && now.isAfter(endTime)
@@ -386,51 +391,63 @@ fun TodayScreen(
         }
 
         "xxt" -> {
-            SectionHeader("学习通")
+            SectionHeader(if (wakeupSource) "课表来源 · WakeUp" else "课表来源 · 学习通")
             Card(insideMargin = CardPadding) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = MiuixIcons.Update,
+                            imageVector = if (wakeupSource) MiuixIcons.Weeks else MiuixIcons.Update,
                             contentDescription = null,
-                            tint = if (xxt.loggedIn) MiuixTheme.colorScheme.primary
+                            tint = if (wakeupSource || xxt.loggedIn) MiuixTheme.colorScheme.primary
                             else MiuixTheme.colorScheme.onBackgroundVariant,
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                text = when {
-                                    !xxt.loggedIn -> "未登录"
-                                    xxt.userName.isNotBlank() -> "${xxt.userName} 已登录"
-                                    else -> "已登录"
+                                text = if (wakeupSource) {
+                                    if (courses.isEmpty()) "还没有导入课表"
+                                    else "已导入 ${courses.size} 门课"
+                                } else {
+                                    when {
+                                        !xxt.loggedIn -> "未登录"
+                                        xxt.userName.isNotBlank() -> "${xxt.userName} 已登录"
+                                        else -> "已登录"
+                                    }
                                 },
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
                             )
                             Text(
-                                text = when {
-                                    !xxt.loggedIn -> "登录后可直接同步课程表、作业和考试"
-                                    xxt.hasSynced -> "上次同步 ${com.bhu.campus.data.formatDateTimeShort(xxt.lastSync)}" +
-                                        (if (xxt.semesterLabel.isNotBlank()) " · ${xxt.semesterLabel}" else "")
-                                    else -> "已登录，还没同步过"
+                                text = if (wakeupSource) {
+                                    "在 WakeUp 里导出为 ICS，再导进来就是最新课表；上课时间也会一起校准"
+                                } else {
+                                    when {
+                                        !xxt.loggedIn -> "登录后可直接同步课程表、作业和考试"
+                                        xxt.hasSynced -> "上次同步 ${com.bhu.campus.data.formatDateTimeShort(xxt.lastSync)}" +
+                                            (if (xxt.semesterLabel.isNotBlank()) " · ${xxt.semesterLabel}" else "")
+                                        else -> "已登录，还没同步过"
+                                    }
                                 },
                                 fontSize = 11.sp,
                                 color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.padding(top = 2.dp),
                             )
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    if (xxt.loggedIn) {
-                        TextButton(
+                    when {
+                        wakeupSource -> TextButton(
+                            text = if (courses.isEmpty()) "导入 WakeUp 课表" else "重新导入",
+                            onClick = onImportWakeup,
+                        )
+                        xxt.loggedIn -> TextButton(
                             text = if (syncing) "同步中…" else "同步课表与作业",
                             onClick = { if (!syncing) onSyncXxt() },
                         )
-                    } else {
-                        TextButton(text = "登录学习通", onClick = onLoginXxt)
+                        else -> TextButton(text = "登录学习通", onClick = onLoginXxt)
                     }
                 }
             }

@@ -45,6 +45,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.bhu.campus.data.AppSettings
 import com.bhu.campus.data.CampusStore
 import com.bhu.campus.data.Course
+import com.bhu.campus.data.SCHEDULE_WAKEUP
+import com.bhu.campus.data.SCHEDULE_XXT
 import com.bhu.campus.data.TaskItem
 import com.bhu.campus.data.TYPE_EXAM
 import com.bhu.campus.data.TYPE_HOMEWORK
@@ -52,6 +54,7 @@ import com.bhu.campus.data.WEEKDAY_LABELS
 import com.bhu.campus.data.compressWeeks
 import com.bhu.campus.data.expandWeeks
 import com.bhu.campus.data.formatFull
+import com.bhu.campus.data.hhmm
 import com.bhu.campus.data.parseDueInput
 import java.time.Instant
 import java.time.LocalDate
@@ -323,12 +326,15 @@ fun SettingsDialog(
     onDismiss: () -> Unit,
     onSave: (AppSettings) -> Unit,
     onClearData: () -> Unit,
+    onResetSectionTimes: () -> Unit,
 ) {
     var startText by remember { mutableStateOf(LocalDate.ofEpochDay(settings.semesterStart).toString()) }
     var weeksText by remember { mutableStateOf(settings.totalWeeks.toString()) }
     var building by remember { mutableStateOf(settings.building) }
     var room by remember { mutableStateOf(settings.room) }
     var showEnergy by remember { mutableStateOf(settings.showEnergy) }
+    var source by remember { mutableStateOf(settings.scheduleSource) }
+    val sectionTimes = settings.effectiveSectionTimes
 
     DialogScaffold(
         title = "设置",
@@ -352,6 +358,7 @@ fun SettingsDialog(
                                 building = building.trim(),
                                 room = room.trim(),
                                 showEnergy = showEnergy,
+                                scheduleSource = source,
                             )
                         )
                     },
@@ -362,6 +369,52 @@ fun SettingsDialog(
             }
         },
     ) {
+        FieldLabel("课表来源")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SelectablePill(
+                text = "学习通",
+                selected = source == SCHEDULE_XXT,
+                modifier = Modifier.weight(1f),
+            ) { source = SCHEDULE_XXT }
+            SelectablePill(
+                text = "WakeUp",
+                selected = source == SCHEDULE_WAKEUP,
+                modifier = Modifier.weight(1f),
+            ) { source = SCHEDULE_WAKEUP }
+        }
+        Text(
+            text = if (source == SCHEDULE_WAKEUP) {
+                "今日页和课程表页显示「导入」，从 WakeUp 导出的 ICS 读课表。"
+            } else {
+                "今日页和课程表页显示「同步」，直接拉学习通的课程、作业和考试。"
+            },
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+        )
+
+        FieldLabel("节次作息")
+        Text(
+            text = sectionTimes.take(4).joinToString("  ") {
+                "${it.first.hhmm()}–${it.second.hhmm()}"
+            } + if (sectionTimes.size > 4) "  …" else "",
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onBackgroundVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (settings.sectionTimes.isEmpty()) "当前是默认作息" else "已按导入的课表校准",
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (settings.sectionTimes.isNotEmpty()) {
+                TextButton(text = "恢复默认", onClick = onResetSectionTimes)
+            }
+        }
+
         TextField(
             value = startText,
             onValueChange = { startText = it },

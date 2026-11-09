@@ -34,6 +34,11 @@ object WakeupImport {
         val kind: String,
         /** 解析过程中的提醒 */
         val notes: List<String>,
+        /**
+         * 从 ICS 里推断出来的节次作息（总是 12 项）。空表示沿用当前作息，不做改动。
+         * 有了它，导入后课表格子左边的时间、今日页的「几点上课」才跟学校真实作息对得上。
+         */
+        val sectionTimes: List<Pair<java.time.LocalTime, java.time.LocalTime>> = emptyList(),
     )
 
     private val DATE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss")
@@ -117,6 +122,15 @@ object WakeupImport {
             ?: throw IllegalArgumentException("课程没有开始时间")
         val baseMonday = firstDay.minusDays((firstDay.dayOfWeek.value - 1).toLong())
 
+        // 先用 ICS 里的真实起止时间推断作息，再按推断出来的节次表分格子。
+        // 顺序很重要：如果先按默认表分节次、再推断，遇到作息差得多的情况会把课塞进错的节次。
+        val spans = events.mapNotNull { ev ->
+            val from = ev.start ?: return@mapNotNull null
+            from.toLocalTime() to (ev.end ?: from).toLocalTime()
+        }
+        val table = inferSectionTimes(spans)
+        val customTimes = if (table == DEFAULT_SECTION_TIMES) emptyList() else table
+
         val merged = LinkedHashMap<String, Pair<Course, MutableSet<Int>>>()
         var colorSeed = 1
 
@@ -126,14 +140,14 @@ object WakeupImport {
             if (name.isEmpty()) return@forEach
 
             val day = start.dayOfWeek.value
-            val startIdx = sectionOf(start.toLocalTime())
+            val startIdx = sectionOf(start.toLocalTime(), table)
             // 结束时间要跟「节的结束时间」比，不能跟下一节的开始时间比：
             // 09:40 离第 3 节的 10:00 只有 20 分钟，但离第 2 节的下课时间正好 0，那才是对的。
-            val endIdx = ev.end?.let { sectionEndOf(it.toLocalTime()) } ?: startIdx
+            val endIdx = ev.end?.let { sectionEndOf(it.toLocalTime(), table) } ?: startIdx
             val s = minOf(startIdx, endIdx)
             val e = maxOf(startIdx, endIdx)
 
-            if (offBy(start.toLocalTime(), DEFAULT_SECTION_TIMES[s - 1].first) > SECTION_TOLERANCE_MIN) {
+            if (offBy(start.toLocalTime(), table[s - 1].first) > SECTION_TOLERANCE_MIN) {
                 mismatch++
             }
 
@@ -143,14 +157,20 @@ object WakeupImport {
                 ?: weeksOf(ev.rrule, startWeek, baseMonday, totalWeeks)
             if (ev.rrule.isBlank() && weeks.size <= 1) noRrule++
 
-            val location = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
-            val key = "$name|$location|$day|$s|$e"
+            // 有些教务的 LOCATION 是「博闻楼-C505 赵明副教授」这种把老师也塞进来的，
+            // 展示时要把老师剥掉，不然今日页会变成「教室 老师 / 教室 老师」。
+            val rawLocation = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
+            val teacher = field(ev.description, "教师", "老师", "任课教师")
+            val location = stripTeacher(rawLocation, teacher)
+            // 合并键不带教室：同一门课同一节次换教室（或教务里挂了两间）很常见，
+            // 带进 key 会裂成两条，课表格子里叠着、今日页还会重复列出来。
+            val key = "$name|$teacher|$day|$s|$e"
             val exist = merged[key]
             val validWeeks = weeks.filter { it in 1..30 }
             if (exist == null) {
                 merged[key] = Course(
                     name = name,
-                    teacher = field(ev.description, "教师", "老师", "任课教师"),
+                    teacher = teacher,
                     location = location,
                     weekday = day,
                     start = s,
@@ -162,6 +182,14 @@ object WakeupImport {
                 colorSeed++
             } else {
                 exist.second += validWeeks
+                // 教室按出现顺序去重拼起来，最多留两个，多了格子放不下
+                val (course, _) = exist
+                val places = (course.location.split(" / ") + location)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .take(2)
+                merged[key] = course.copy(location = places.joinToString(" / ")) to exist.second
             }
         }
 
@@ -174,7 +202,10 @@ object WakeupImport {
         if (courses.isEmpty()) throw IllegalArgumentException("解析完成，但没有得到有效课程")
 
         if (mismatch > 0) {
-            notes += "有 $mismatch 节课的上课时间和默认作息对不上，节次按最接近的一节估的"
+            notes += "有 $mismatch 节课的上课时间和推断出的作息差得较多，节次可能不准"
+        }
+        if (customTimes.isNotEmpty()) {
+            notes += "已按 ICS 里的上课时间更新作息（第 1 节 ${customTimes[0].first.hhmm()} 开始）"
         }
         if (noRrule > 0 && courses.size > 1) {
             notes += "有 $noRrule 条没有周次信息，只按出现的那一周记"
@@ -188,6 +219,7 @@ object WakeupImport {
             firstMonday = baseMonday.toEpochDay(),
             kind = "ICS",
             notes = notes,
+            sectionTimes = customTimes,
         )
     }
 
@@ -282,32 +314,138 @@ object WakeupImport {
         return weeks.ifEmpty { null }
     }
 
+    /**
+     * 从 ICS 的事件时间里推断真实的节次作息。
+     *
+     * 做法：
+     * 1. 先用当前表（第一次就是默认表）把事件粗分到 1..12 节，按每节的开始时刻、
+     *    下课时刻各取众数——众数能扛住个别课早退十来分钟的噪音；
+     * 2. 有些节次是「两节连上」导出成一个事件的（8:20–10:00），这一节的中间下课时间
+     *    根本不会出现在数据里，于是用「上一节实际下课 + 默认课间」递推补上，
+     *    下课同理用「本节开始 + 默认时长」补；
+     * 3. 用新表再分一次，两轮基本收敛。
+     */
+    private fun inferSectionTimes(
+        spans: List<Pair<java.time.LocalTime, java.time.LocalTime>>,
+    ): List<Pair<java.time.LocalTime, java.time.LocalTime>> {
+        if (spans.isEmpty()) return DEFAULT_SECTION_TIMES
+        var table = DEFAULT_SECTION_TIMES
+        repeat(3) {
+            val starts = List(table.size) { mutableListOf<java.time.LocalTime>() }
+            val ends = List(table.size) { mutableListOf<java.time.LocalTime>() }
+            spans.forEach { (from, to) ->
+                if (!to.isAfter(from)) return@forEach
+                starts[sectionOf(from, table) - 1] += from
+                ends[sectionEndOf(to, table) - 1] += to
+            }
+            val sampledStarts = starts.map { modeTime(it) }.toMutableList()
+            val sampledEnds = ends.map { modeTime(it) }.toMutableList()
+
+            // 双向传播两轮：数据里常见的「两节连上」只给了一个 8:20–10:00 的整块，
+            // 中间那节的上/下课时间得靠相邻已知点 + 默认课间/时长推回来。
+            repeat(2) {
+                // 1) 下课未知：用下一节的上课时间减默认课间反推
+                for (i in table.indices.reversed()) {
+                    if (sampledEnds[i] == null && i + 1 < table.size && sampledStarts[i + 1] != null) {
+                        val gap = gapMinutes(table, i).toLong()
+                        val guess = sampledStarts[i + 1]!!.minusMinutes(gap)
+                        if (guess.isAfter(table[i].first)) sampledEnds[i] = guess
+                    }
+                }
+                // 2) 上课未知：用本节下课减默认时长
+                for (i in table.indices) {
+                    if (sampledStarts[i] == null && sampledEnds[i] != null) {
+                        sampledStarts[i] = sampledEnds[i]!!.minusMinutes(durationMinutes(table, i).toLong())
+                    }
+                }
+                // 3) 上课未知：用上一节下课加默认课间
+                for (i in table.indices) {
+                    if (sampledStarts[i] == null && i > 0 && sampledEnds[i - 1] != null) {
+                        val gap = gapMinutes(table, i - 1).toLong()
+                        sampledStarts[i] = sampledEnds[i - 1]!!.plusMinutes(gap)
+                    }
+                }
+                // 4) 下课未知：用本节上课加默认时长
+                for (i in table.indices) {
+                    if (sampledEnds[i] == null && sampledStarts[i] != null) {
+                        sampledEnds[i] = sampledStarts[i]!!.plusMinutes(durationMinutes(table, i).toLong())
+                    }
+                }
+            }
+
+            val next = table.mapIndexed { index, fallback ->
+                val from = sampledStarts[index] ?: fallback.first
+                val to = sampledEnds[index] ?: fallback.second
+                if (to.isAfter(from)) from to to else fallback
+            }
+            if (next == table) return table
+            table = next
+        }
+        return table
+    }
+
+    /** 默认表里第 [index] 节到下一节之间留的空档（分钟）。 */
+    private fun gapMinutes(
+        table: List<Pair<java.time.LocalTime, java.time.LocalTime>>,
+        index: Int,
+    ): Int {
+        val next = table.getOrNull(index + 1) ?: return 10
+        return ChronoUnit.MINUTES.between(table[index].second, next.first).toInt().coerceIn(0, 90)
+    }
+
+    /** 默认表里第 [index] 节的长度（分钟）。 */
+    private fun durationMinutes(
+        table: List<Pair<java.time.LocalTime, java.time.LocalTime>>,
+        index: Int,
+    ): Int = ChronoUnit.MINUTES.between(table[index].first, table[index].second)
+        .toInt().coerceIn(10, 120)
+
+    /** 取众数（出现次数最多的时刻）；次数一样时取更早的那个。 */
+    private fun modeTime(samples: List<java.time.LocalTime>): java.time.LocalTime? {
+        if (samples.isEmpty()) return null
+        return samples.groupBy { it.hour * 60 + it.minute }
+            .toList()
+            .sortedWith(
+                compareByDescending<Pair<Int, List<java.time.LocalTime>>> { it.second.size }
+                    .thenBy { it.first }
+            )
+            .firstOrNull()
+            ?.second
+            ?.first()
+    }
+
     /** 按开始时间找最接近的一节（1 起）。 */
-    private fun sectionOf(time: java.time.LocalTime): Int {
+    private fun sectionOf(
+        time: java.time.LocalTime,
+        table: List<Pair<java.time.LocalTime, java.time.LocalTime>> = DEFAULT_SECTION_TIMES,
+    ): Int {
         var best = 1
         var bestDiff = Long.MAX_VALUE
-        DEFAULT_SECTION_TIMES.forEachIndexed { index, pair ->
+        table.forEachIndexed { index, pair ->
             val diff = abs(ChronoUnit.MINUTES.between(time, pair.first))
             if (diff < bestDiff) {
                 bestDiff = diff
                 best = index + 1
             }
         }
-        return best.coerceIn(1, DEFAULT_SECTION_TIMES.size)
+        return best.coerceIn(1, table.size)
     }
 
     /** 按结束时间找它对的是第几节的下课时间。 */
-    private fun sectionEndOf(time: java.time.LocalTime): Int {
+    private fun sectionEndOf(
+        time: java.time.LocalTime,
+        table: List<Pair<java.time.LocalTime, java.time.LocalTime>> = DEFAULT_SECTION_TIMES,
+    ): Int {
         var best = 1
         var bestDiff = Long.MAX_VALUE
-        DEFAULT_SECTION_TIMES.forEachIndexed { index, pair ->
+        table.forEachIndexed { index, pair ->
             val diff = abs(ChronoUnit.MINUTES.between(time, pair.second))
             if (diff < bestDiff) {
                 bestDiff = diff
                 best = index + 1
             }
         }
-        return best.coerceIn(1, DEFAULT_SECTION_TIMES.size)
+        return best.coerceIn(1, table.size)
     }
 
     private fun offBy(a: java.time.LocalTime, b: java.time.LocalTime): Long =
@@ -317,6 +455,25 @@ object WakeupImport {
         .replace(Regex("\\[(必修|选修|限选|公选|任选)\\]"), "")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    /**
+     * 把地点尾巴上的教师名去掉：「博闻楼-C505 赵明副教授」→「博闻楼-C505」。
+     *
+     * 两种来源都要处理：DESCRIPTION 里能抠到教师名时直接替换；
+     * 抠不到时（很多教务只把「教室+老师」塞进 LOCATION），按「姓名+职称」的尾巴兜底。
+     */
+    internal fun stripTeacher(location: String, teacher: String): String {
+        if (location.isBlank()) return ""
+        val tail = Regex("\\s*[\\u4e00-\\u9fa5·]{2,4}(?:副教授|教授|讲师|助教|老师|研究员|实验师|工程师)\\s*$")
+        return location.split(" / ")
+            .joinToString(" / ") { part ->
+                var s = part.trim()
+                if (teacher.isNotBlank()) s = s.replace(teacher, "")
+                s = s.replace(tail, "")
+                s.trim().trim('，', ',', '、', '·', '/', '-').trim()
+            }
+            .trim()
+    }
 
     /** 从 DESCRIPTION 里抠「教师：张三」这种字段。 */
     private fun field(description: String, vararg labels: String): String {

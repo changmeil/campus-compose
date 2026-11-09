@@ -40,6 +40,7 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.time.LocalDate
+import java.time.LocalTime
 
 /**
  * 导入 WakeUp 课表的对话框。
@@ -50,7 +51,12 @@ import java.time.LocalDate
 @Composable
 fun WakeupImportDialog(
     onDismiss: () -> Unit,
-    onImport: (courses: List<Course>, firstMonday: Long?, replace: Boolean) -> Unit,
+    onImport: (
+        courses: List<Course>,
+        firstMonday: Long?,
+        sectionTimes: List<Pair<LocalTime, LocalTime>>,
+        replace: Boolean,
+    ) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -202,10 +208,14 @@ fun WakeupImportDialog(
                 if (ready != null && existing > 0) {
                     TextButton(
                         text = "追加",
-                        onClick = { onImport(ready.courses, ready.firstMonday, false) },
+                        onClick = {
+                            onImport(ready.courses, ready.firstMonday, ready.sectionTimes, false)
+                        },
                     )
                     Button(
-                        onClick = { onImport(ready.courses, ready.firstMonday, true) },
+                        onClick = {
+                            onImport(ready.courses, ready.firstMonday, ready.sectionTimes, true)
+                        },
                         colors = ButtonDefaults.buttonColorsPrimary(),
                     ) {
                         Text("覆盖全部", color = MiuixTheme.colorScheme.onPrimary)
@@ -214,7 +224,12 @@ fun WakeupImportDialog(
                     Button(
                         onClick = {
                             if (ready != null) {
-                                onImport(ready.courses, ready.firstMonday, existing > 0)
+                                onImport(
+                                    ready.courses,
+                                    ready.firstMonday,
+                                    ready.sectionTimes,
+                                    existing > 0,
+                                )
                             } else {
                                 doParse()
                             }

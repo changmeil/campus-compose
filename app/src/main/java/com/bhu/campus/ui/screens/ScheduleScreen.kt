@@ -47,7 +47,7 @@ import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.bhu.campus.data.CampusStore
 import com.bhu.campus.data.Course
-import com.bhu.campus.data.DEFAULT_SECTION_TIMES
+import com.bhu.campus.data.SCHEDULE_WAKEUP
 import com.bhu.campus.data.WEEKDAY_LABELS
 import com.bhu.campus.data.weekIndexOf
 import com.bhu.campus.data.weekStartDate
@@ -66,9 +66,12 @@ fun ScheduleScreen(
     onAddCourse: (Int, Int) -> Unit,
     onEditCourse: (Course) -> Unit,
     onImport: () -> Unit,
+    onSync: () -> Unit,
 ) {
     val courses = CampusStore.courses
     val settings = CampusStore.settings
+    // 作息跟着设置走：导入 WakeUp 后是按学校真实时间校准过的那份
+    val sectionTimes = remember(settings.sectionTimes) { settings.effectiveSectionTimes }
     val today = LocalDate.now()
     val currentWeek = weekIndexOf(today, settings.semesterStart).coerceAtLeast(1)
     var weekOffset by rememberSaveable { mutableIntStateOf(0) }
@@ -90,15 +93,21 @@ fun ScheduleScreen(
             week = week,
             isCurrentWeek = week == currentWeek,
             firstDate = weekStartDate(week, settings.semesterStart),
+            source = settings.scheduleSource,
             onPrev = { weekOffset -= 1 },
             onNext = { weekOffset += 1 },
             onToday = { weekOffset = 0 },
             onImport = onImport,
+            onSync = onSync,
         )
 
         if (weekCourses.isEmpty()) {
             Text(
-                text = "本周还没有课，点任意格子手动添加，或在今日页登录学习通同步",
+                text = if (settings.scheduleSource == SCHEDULE_WAKEUP) {
+                    "本周还没有课，点任意格子手动添加，或者点右上角「导入」导入 WakeUp 课表"
+                } else {
+                    "本周还没有课，点任意格子手动添加，或者点右上角「同步」从学习通拉取"
+                },
                 fontSize = 11.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
@@ -118,7 +127,7 @@ fun ScheduleScreen(
                 Column {
                     DayHeaderRow(week = week, days = visibleDays, columnWidth = colWidth)
                     Row(Modifier.fillMaxWidth()) {
-                        SectionGutter()
+                        SectionGutter(sectionTimes)
                         visibleDays.forEach { day ->
                             DayColumn(
                                 day = day,
@@ -126,6 +135,7 @@ fun ScheduleScreen(
                                 width = colWidth,
                                 isToday = day == today.dayOfWeek.value && week == currentWeek,
                                 courses = weekCourses.filter { it.weekday == day },
+                                sectionTimes = sectionTimes,
                                 onAddCourse = onAddCourse,
                                 onEditCourse = onEditCourse,
                             )
@@ -142,10 +152,12 @@ private fun WeekBar(
     week: Int,
     isCurrentWeek: Boolean,
     firstDate: LocalDate,
+    source: String,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit,
     onImport: () -> Unit,
+    onSync: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -186,7 +198,11 @@ private fun WeekBar(
         if (!isCurrentWeek) {
             TextButton(text = "回到本周", onClick = onToday)
         }
-        TextButton(text = "导入", onClick = onImport)
+        if (source == SCHEDULE_WAKEUP) {
+            TextButton(text = "导入", onClick = onImport)
+        } else {
+            TextButton(text = "同步", onClick = onSync)
+        }
     }
 }
 
@@ -224,9 +240,9 @@ private fun DayHeaderRow(week: Int, days: List<Int>, columnWidth: Dp) {
 }
 
 @Composable
-private fun SectionGutter() {
+private fun SectionGutter(sectionTimes: List<Pair<LocalTime, LocalTime>>) {
     val now = LocalTime.now()
-    val currentSection = DEFAULT_SECTION_TIMES.indexOfFirst { (start, end) ->
+    val currentSection = sectionTimes.indexOfFirst { (start, end) ->
         !now.isBefore(start) && !now.isAfter(end)
     }
     Column(Modifier.width(GutterWidth)) {
@@ -246,7 +262,7 @@ private fun SectionGutter() {
                     else MiuixTheme.colorScheme.onBackgroundVariant,
                 )
                 Text(
-                    text = DEFAULT_SECTION_TIMES.getOrNull(index)?.first?.let {
+                    text = sectionTimes.getOrNull(index)?.first?.let {
                         String.format("%d:%02d", it.hour, it.minute)
                     } ?: "",
                     fontSize = 8.sp,
@@ -264,6 +280,7 @@ private fun DayColumn(
     width: Dp,
     isToday: Boolean,
     courses: List<Course>,
+    sectionTimes: List<Pair<LocalTime, LocalTime>>,
     onAddCourse: (Int, Int) -> Unit,
     onEditCourse: (Course) -> Unit,
 ) {
@@ -342,11 +359,11 @@ private fun DayColumn(
 
         if (isToday) {
             val now = LocalTime.now()
-            val index = DEFAULT_SECTION_TIMES.indexOfFirst { (start, end) ->
+            val index = sectionTimes.indexOfFirst { (start, end) ->
                 !now.isBefore(start) && !now.isAfter(end)
             }
             if (index >= 0) {
-                val (start, end) = DEFAULT_SECTION_TIMES[index]
+                val (start, end) = sectionTimes[index]
                 val total = java.time.Duration.between(start, end).toMinutes().coerceAtLeast(1)
                 val passed = java.time.Duration.between(start, now).toMinutes().coerceIn(0, total)
                 val y = CellHeight * index + CellHeight * (passed.toFloat() / total)
