@@ -181,7 +181,9 @@ object CampusStore {
     }
 
     private fun load() {
-        courses = decodeCourses(prefs.getString("courses", null))
+        val rawCourses = decodeCourses(prefs.getString("courses", null))
+        val mergedCourses = mergeDuplicateCourses(rawCourses)
+        courses = mergedCourses
         tasks = decodeTasks(prefs.getString("tasks", null))
         settings = decodeSettings(prefs.getString("settings", null))
         xxt = decodeXxt(prefs.getString("xxt", null))
@@ -189,6 +191,9 @@ object CampusStore {
         // 老版本只存了一条 waterQr，这里把它升级成第一台预设（先赋值再落盘，别把老数据写没了）
         val legacy = if (stored.isEmpty()) decodeLegacyWaterQr() else null
         waterQrs = stored.ifEmpty { listOfNotNull(legacy) }
+        // 老版本导入把教室带进了合并键，同一门课会裂成两条；这里在读盘时兜一次底，
+        // 用户不用重新导入也能看到干净的今日页。
+        if (mergedCourses.size != rawCourses.size) persist()
         if (legacy != null) persistWaterQrs()
     }
 
@@ -291,6 +296,35 @@ object CampusStore {
     }
 
     /* ---------------- 课程 ---------------- */
+
+    /**
+     * 同名、同老师、同节次的课并成一条：周次取并集，教室拼起来（最多两个）。
+     *
+     * 起因是导入 WakeUp 的 ICS 时把教室带进了合并键，教务里同一门课挂了两间教室
+     * （或换过教室）就会裂成两条——课表格子里两个块完全叠住，只露出上面那条，
+     * 今日页却会把两条都列出来，看着像"今天上了两遍同一门课"。
+     */
+    private fun mergeDuplicateCourses(list: List<Course>): List<Course> {
+        val out = LinkedHashMap<String, Course>()
+        list.forEach { course ->
+            val key = "${course.name}|${course.teacher}|${course.weekday}|${course.start}|${course.end}"
+            val old = out[key]
+            out[key] = if (old == null) {
+                course
+            } else {
+                val places = (old.location.split(" / ") + course.location)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .take(2)
+                old.copy(
+                    weeks = (old.weeks + course.weeks).distinct().sorted(),
+                    location = places.joinToString(" / "),
+                )
+            }
+        }
+        return out.values.toList()
+    }
 
     fun upsertCourse(course: Course) {
         val index = courses.indexOfFirst { it.id == course.id }

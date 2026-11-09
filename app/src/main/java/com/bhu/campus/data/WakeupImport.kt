@@ -158,13 +158,16 @@ object WakeupImport {
             if (ev.rrule.isBlank() && weeks.size <= 1) noRrule++
 
             val location = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
-            val key = "$name|$location|$day|$s|$e"
+            val teacher = field(ev.description, "教师", "老师", "任课教师")
+            // 合并键不带教室：同一门课同一节次换教室（或教务里挂了两间）很常见，
+            // 带进 key 会裂成两条，课表格子里叠着、今日页还会重复列出来。
+            val key = "$name|$teacher|$day|$s|$e"
             val exist = merged[key]
             val validWeeks = weeks.filter { it in 1..30 }
             if (exist == null) {
                 merged[key] = Course(
                     name = name,
-                    teacher = field(ev.description, "教师", "老师", "任课教师"),
+                    teacher = teacher,
                     location = location,
                     weekday = day,
                     start = s,
@@ -176,6 +179,14 @@ object WakeupImport {
                 colorSeed++
             } else {
                 exist.second += validWeeks
+                // 教室按出现顺序去重拼起来，最多留两个，多了格子放不下
+                val (course, _) = exist
+                val places = (course.location.split(" / ") + location)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .take(2)
+                merged[key] = course.copy(location = places.joinToString(" / ")) to exist.second
             }
         }
 
