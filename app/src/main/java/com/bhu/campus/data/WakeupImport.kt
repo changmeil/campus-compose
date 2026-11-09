@@ -136,8 +136,10 @@ object WakeupImport {
             }
 
             val startWeek = weekOf(start.toLocalDate(), baseMonday)
-            val weeks = weeksOf(ev.rrule, startWeek, baseMonday, totalWeeks)
-            if (ev.rrule.isBlank()) noRrule++
+            // DESCRIPTION 里的「第1-16周」比 RRULE 更贴近课表，优先用它
+            val weeks = weeksFromDescription(ev.description)
+                ?: weeksOf(ev.rrule, startWeek, baseMonday, totalWeeks)
+            if (ev.rrule.isBlank() && weeks.size <= 1) noRrule++
 
             val location = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
             val key = "$name|$location|$day|$s|$e"
@@ -255,6 +257,28 @@ object WakeupImport {
 
     private fun weekOf(date: LocalDate, baseMonday: LocalDate): Int =
         ((date.toEpochDay() - baseMonday.toEpochDay()) / 7).toInt() + 1
+
+    /**
+     * 从 DESCRIPTION 里抠周次，比如「第1-16周」「1,3,5-9周」「第1-15周(单周)」。
+     * 认不出来返回 null，交给 RRULE 算。
+     */
+    private fun weeksFromDescription(description: String): List<Int>? {
+        if (description.isBlank()) return null
+        val m = Regex("(?:第)?\\s*(\\d{1,2}(?:\\s*[-~－,，、]\\s*\\d{1,2})*)\\s*周")
+            .find(description) ?: return null
+        val raw = m.groupValues[1]
+            .replace('－', '-')
+            .replace('~', '-')
+            .replace('、', ',')
+            .replace('，', ',')
+        var weeks = expandWeeks(raw).filter { it in 1..30 }
+        if (weeks.isEmpty()) return null
+        val single = description.contains("单周")
+        val dual = description.contains("双周") || description.contains("偶周")
+        if (single && !dual) weeks = weeks.filter { it % 2 == 1 }
+        if (dual && !single) weeks = weeks.filter { it % 2 == 0 }
+        return weeks.ifEmpty { null }
+    }
 
     /** 按开始时间找最接近的一节（1 起）。 */
     private fun sectionOf(time: java.time.LocalTime): Int {
