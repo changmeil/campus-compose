@@ -356,7 +356,10 @@ object CampusStore {
         replace: Boolean,
         sectionTimes: List<Pair<LocalTime, LocalTime>> = emptyList(),
     ) {
-        courses = if (replace) imported else courses + imported
+        // 「追加」只保留手工/学习通那部分，上一次导入的 WakeUp 课整批换掉——
+        // 否则重新导入一次，同一门课会在格子里叠两层、今日页列两遍。
+        val kept = if (replace) emptyList() else courses.filterNot { it.source == SOURCE_WAKEUP }
+        courses = mergeDuplicateCourses(kept + imported)
         settings = settings.copy(
             semesterStart = firstMonday ?: settings.semesterStart,
             sectionTimes = if (sectionTimes.isNotEmpty()) encodeSectionTimes(sectionTimes)
