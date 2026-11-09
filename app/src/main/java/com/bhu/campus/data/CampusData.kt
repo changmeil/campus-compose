@@ -193,7 +193,7 @@ object CampusStore {
         waterQrs = stored.ifEmpty { listOfNotNull(legacy) }
         // 老版本导入把教室带进了合并键，同一门课会裂成两条；这里在读盘时兜一次底，
         // 用户不用重新导入也能看到干净的今日页。
-        if (mergedCourses.size != rawCourses.size) persist()
+        if (mergedCourses != rawCourses) persist()
         if (legacy != null) persistWaterQrs()
     }
 
@@ -306,7 +306,9 @@ object CampusStore {
      */
     private fun mergeDuplicateCourses(list: List<Course>): List<Course> {
         val out = LinkedHashMap<String, Course>()
-        list.forEach { course ->
+        list.forEach { raw ->
+            // 顺手把老数据里「教室 老师」这种脏地点洗干净
+            val course = raw.copy(location = WakeupImport.stripTeacher(raw.location, raw.teacher))
             val key = "${course.name}|${course.teacher}|${course.weekday}|${course.start}|${course.end}"
             val old = out[key]
             out[key] = if (old == null) {

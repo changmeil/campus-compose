@@ -157,8 +157,11 @@ object WakeupImport {
                 ?: weeksOf(ev.rrule, startWeek, baseMonday, totalWeeks)
             if (ev.rrule.isBlank() && weeks.size <= 1) noRrule++
 
-            val location = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
+            // 有些教务的 LOCATION 是「博闻楼-C505 赵明副教授」这种把老师也塞进来的，
+            // 展示时要把老师剥掉，不然今日页会变成「教室 老师 / 教室 老师」。
+            val rawLocation = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
             val teacher = field(ev.description, "教师", "老师", "任课教师")
+            val location = stripTeacher(rawLocation, teacher)
             // 合并键不带教室：同一门课同一节次换教室（或教务里挂了两间）很常见，
             // 带进 key 会裂成两条，课表格子里叠着、今日页还会重复列出来。
             val key = "$name|$teacher|$day|$s|$e"
@@ -452,6 +455,25 @@ object WakeupImport {
         .replace(Regex("\\[(必修|选修|限选|公选|任选)\\]"), "")
         .replace(Regex("\\s+"), " ")
         .trim()
+
+    /**
+     * 把地点尾巴上的教师名去掉：「博闻楼-C505 赵明副教授」→「博闻楼-C505」。
+     *
+     * 两种来源都要处理：DESCRIPTION 里能抠到教师名时直接替换；
+     * 抠不到时（很多教务只把「教室+老师」塞进 LOCATION），按「姓名+职称」的尾巴兜底。
+     */
+    internal fun stripTeacher(location: String, teacher: String): String {
+        if (location.isBlank()) return ""
+        val tail = Regex("\\s*[\\u4e00-\\u9fa5·]{2,4}(?:副教授|教授|讲师|助教|老师|研究员|实验师|工程师)\\s*$")
+        return location.split(" / ")
+            .joinToString(" / ") { part ->
+                var s = part.trim()
+                if (teacher.isNotBlank()) s = s.replace(teacher, "")
+                s = s.replace(tail, "")
+                s.trim().trim('，', ',', '、', '·', '/', '-').trim()
+            }
+            .trim()
+    }
 
     /** 从 DESCRIPTION 里抠「教师：张三」这种字段。 */
     private fun field(description: String, vararg labels: String): String {
