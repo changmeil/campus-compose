@@ -162,9 +162,10 @@ object WakeupImport {
             val rawLocation = ev.location.trim().ifBlank { field(ev.description, "地点", "教室", "上课地点") }
             val teacher = field(ev.description, "教师", "老师", "任课教师")
             val location = stripTeacher(rawLocation, teacher)
-            // 合并键不带教室：同一门课同一节次换教室（或教务里挂了两间）很常见，
-            // 带进 key 会裂成两条，课表格子里叠着、今日页还会重复列出来。
-            val key = "$name|$teacher|$day|$s|$e"
+            // 合并键只留课名 + 星期 + 节次：教室和老师都可能有多个
+            // （教务挂两间教室、同一门课不同老师），带进 key 就裂成两条，
+            // 课表格子里叠着、今日页还会重复列出来。
+            val key = "$name|$day|$s|$e"
             val exist = merged[key]
             val validWeeks = weeks.filter { it in 1..30 }
             if (exist == null) {
@@ -182,14 +183,22 @@ object WakeupImport {
                 colorSeed++
             } else {
                 exist.second += validWeeks
-                // 教室按出现顺序去重拼起来，最多留两个，多了格子放不下
+                // 教室和老师按出现顺序去重拼起来，各最多留两个，多了格子放不下
                 val (course, _) = exist
-                val places = (course.location.split(" / ") + location)
+                val places = (course.location.split(" / ") + location.split(" / "))
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
                     .distinct()
                     .take(2)
-                merged[key] = course.copy(location = places.joinToString(" / ")) to exist.second
+                val teachers = listOf(course.teacher, teacher)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .take(2)
+                merged[key] = course.copy(
+                    location = places.joinToString(" / "),
+                    teacher = teachers.joinToString(" / "),
+                ) to exist.second
             }
         }
 
