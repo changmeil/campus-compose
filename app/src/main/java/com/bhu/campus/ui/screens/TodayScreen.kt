@@ -336,15 +336,21 @@ fun TodayScreen(
         "express" -> {
             SectionHeader("取快递")
             Card(insideMargin = CardPadding) {
+                val open: (Express.Page) -> Unit = { page ->
+                    if (!Express.openCainiao(context, page)) {
+                        Toast.makeText(context, "没能打开淘宝，请确认已安装", Toast.LENGTH_SHORT).show()
+                    }
+                }
                 val rows = listOf(
                     ExpressAction(
-                        title = "菜鸟驿站 · 待取件",
-                        subtitle = "淘宝里的菜鸟驿站，包裹和取件码都在这",
-                        onClick = {
-                            if (!Express.openCainiao(context)) {
-                                Toast.makeText(context, "没能打开淘宝，请确认已安装", Toast.LENGTH_SHORT).show()
-                            }
-                        },
+                        title = "取件码 · 待取件",
+                        subtitle = "淘宝「我的驿站」首页，包裹卡片上就是取件码",
+                        onClick = { open(Express.Page.PICKUP) },
+                    ),
+                    ExpressAction(
+                        title = "身份码 · 出库",
+                        subtitle = "驿站高拍仪扫这个码，扫完直接拿走",
+                        onClick = { open(Express.Page.IDENTITY) },
                     ),
                 )
                 Column {

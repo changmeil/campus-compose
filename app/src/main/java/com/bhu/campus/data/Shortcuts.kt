@@ -32,6 +32,10 @@ object Shortcuts {
     const val KIND_WATER = "water"
     const val KIND_CAINIAO = "cainiao"
 
+    /** 菜鸟快捷方式的目标页，见 [Express.Page]。 */
+    const val CAINIAO_PICKUP = "pickup"
+    const val CAINIAO_IDENTITY = "identity"
+
     /**
      * 桌面上实际只露 4 个位置（MIUI 实测：注册 5 个也只显示 4 个），
      * 所以内容按「接水设备 → 淘宝菜鸟」排，超出的砍掉。
@@ -67,10 +71,14 @@ object Shortcuts {
             )
         }
 
-        // 淘宝菜鸟驿站
+        // 淘宝菜鸟驿站：取件码（默认）和身份码（出库扫的那个）
         all += build(
-            app, "cainiao", "菜鸟驿站", "取快递 · 菜鸟驿站（淘宝）",
-            KIND_CAINIAO, "", R.drawable.shortcut_cainiao,
+            app, "cainiao", "菜鸟取件码", "取快递 · 取件码（我的驿站）",
+            KIND_CAINIAO, CAINIAO_PICKUP, R.drawable.shortcut_cainiao,
+        )
+        all += build(
+            app, "cainiao_identity", "菜鸟身份码", "取快递 · 身份码（出库扫）",
+            KIND_CAINIAO, CAINIAO_IDENTITY, R.drawable.shortcut_cainiao,
         )
 
         val kept = all.take(slots)

@@ -23,7 +23,12 @@ class ShortcutActionActivity : Activity() {
         when (kind) {
             Shortcuts.KIND_WATER -> openWater(key)
             Shortcuts.KIND_CAINIAO -> {
-                if (!Express.openCainiao(this)) {
+                val page = if (key == Shortcuts.CAINIAO_IDENTITY) {
+                    Express.Page.IDENTITY
+                } else {
+                    Express.Page.PICKUP
+                }
+                if (!Express.openCainiao(this, page)) {
                     Toast.makeText(this, "没能打开淘宝，请确认已安装", Toast.LENGTH_SHORT).show()
                 }
             }
