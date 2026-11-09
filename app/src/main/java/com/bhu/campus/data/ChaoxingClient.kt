@@ -503,9 +503,22 @@ object ChaoxingClient {
         val semesterLabel: String,
         val weekStartEpochDay: Long?,
         val warnings: List<String>,
+        /** 本次是否连课表一起刷了；自动同步可以只拉作业和考试。 */
+        val scheduleSynced: Boolean = true,
     )
 
-    suspend fun sync(context: Context, onProgress: (String, Float) -> Unit): SyncReport = withContext(Dispatchers.IO) {
+    /**
+     * 拉一次学习通。
+     *
+     * @param includeSchedule 是否连课表一起刷。自动同步默认关掉这一项——
+     *   课表一学期就那几门，每次开 App 重拉一遍既慢，又会把 WakeUp 导入的课表覆盖掉；
+     *   作业和考试才是真正每天会变的。手动点「同步」时传 true，永远是全量。
+     */
+    suspend fun sync(
+        context: Context,
+        includeSchedule: Boolean = true,
+        onProgress: (String, Float) -> Unit,
+    ): SyncReport = withContext(Dispatchers.IO) {
         loadCookies(context)
         if (!hasCookie(context)) throw IllegalStateException("还没有登录学习通")
 
@@ -523,11 +536,15 @@ object ChaoxingClient {
         val courses = runCatching { fetchCourses(profile.fid) }.getOrDefault(emptyList())
         if (courses.isEmpty()) warnings += "没取到课程列表"
 
-        val (curriculum, schedule) = runCatching { fetchFullSchedule(onProgress) }
-            .getOrElse {
-                warnings += "课表拉取失败：${it.message ?: "未知错误"}"
-                Curriculum() to emptyList()
-            }
+        val (curriculum, schedule) = if (includeSchedule) {
+            runCatching { fetchFullSchedule(onProgress) }
+                .getOrElse {
+                    warnings += "课表拉取失败：${it.message ?: "未知错误"}"
+                    Curriculum() to emptyList()
+                }
+        } else {
+            Curriculum() to emptyList()
+        }
 
         val homework = runCatching { fetchHomework(courses, onProgress) }
             .getOrElse {
@@ -542,14 +559,16 @@ object ChaoxingClient {
             }
 
         onProgress("写入本地数据…", 0.97f)
-        CampusStore.replaceSyncedCourses(schedule)
+        if (includeSchedule) CampusStore.replaceSyncedCourses(schedule)
         CampusStore.replaceSyncedTasks(homework + exams)
 
         val semesterLabel = listOf(curriculum.schoolYear, curriculum.semester)
             .filter { it.isNotBlank() }
             .joinToString(" ")
-        curriculum.firstWeekEpochDay?.let { day ->
-            CampusStore.updateSettings { it.copy(semesterStart = day, totalWeeks = curriculum.maxWeek) }
+        if (includeSchedule) {
+            curriculum.firstWeekEpochDay?.let { day ->
+                CampusStore.updateSettings { it.copy(semesterStart = day, totalWeeks = curriculum.maxWeek) }
+            }
         }
         CampusStore.updateXxt {
             it.copy(
@@ -570,6 +589,7 @@ object ChaoxingClient {
             semesterLabel = semesterLabel,
             weekStartEpochDay = curriculum.firstWeekEpochDay,
             warnings = warnings,
+            scheduleSynced = includeSchedule,
         )
     }
 

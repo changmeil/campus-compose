@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -334,6 +335,8 @@ fun SettingsDialog(
     var room by remember { mutableStateOf(settings.room) }
     var showEnergy by remember { mutableStateOf(settings.showEnergy) }
     var source by remember { mutableStateOf(settings.scheduleSource) }
+    var autoSync by remember { mutableStateOf(settings.autoSync) }
+    var autoSyncSchedule by remember { mutableStateOf(settings.autoSyncSchedule) }
     val sectionTimes = settings.effectiveSectionTimes
 
     DialogScaffold(
@@ -359,6 +362,8 @@ fun SettingsDialog(
                                 room = room.trim(),
                                 showEnergy = showEnergy,
                                 scheduleSource = source,
+                                autoSync = autoSync,
+                                autoSyncSchedule = autoSyncSchedule,
                             )
                         )
                     },
@@ -391,6 +396,23 @@ fun SettingsDialog(
             fontSize = 11.sp,
             color = MiuixTheme.colorScheme.onBackgroundVariant,
         )
+
+        FieldLabel("自动同步")
+        SwitchRow(
+            title = "打开 App 时自动同步学习通",
+            desc = "距上次超过 2 小时、且 90 天内有作业或考试时才拉；手动同步随时可用",
+            checked = autoSync,
+        ) { autoSync = it }
+        SwitchRow(
+            title = "自动同步时连课表一起刷",
+            desc = if (autoSync) {
+                "关掉只拉作业和考试，课表保持原样（手动点同步仍是全量）"
+            } else {
+                "先打开上面那个开关"
+            },
+            checked = autoSyncSchedule,
+            enabled = autoSync,
+        ) { autoSyncSchedule = it }
 
         FieldLabel("节次作息")
         Text(
@@ -452,24 +474,11 @@ fun SettingsDialog(
             fontSize = 11.sp,
             color = MiuixTheme.colorScheme.onBackgroundVariant,
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("显示宿舍电费", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                Text(
-                    text = "其他学校用不到可以关掉，底部「电费」页和首页卡片会一起隐藏",
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Switch(checked = showEnergy, onCheckedChange = { showEnergy = it })
-        }
+        SwitchRow(
+            title = "显示宿舍电费",
+            desc = "其他学校用不到可以关掉，底部「电费」页和首页卡片会一起隐藏",
+            checked = showEnergy,
+        ) { showEnergy = it }
     }
 }
 
@@ -509,6 +518,39 @@ private fun FieldLabel(text: String) {
         fontSize = 12.sp,
         color = MiuixTheme.colorScheme.onBackgroundVariant,
     )
+}
+
+/** 设置里的一行：左边标题 + 说明，右边开关。[enabled] 为 false 时整行变淡且点不动。 */
+@Composable
+private fun SwitchRow(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.4f)
+            .padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(
+                text = desc,
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = { if (enabled) onChange(it) },
+        )
+    }
 }
 
 @Composable

@@ -189,17 +189,25 @@ fun CampusApp() {
         }
     }
 
-    fun startSync() {
+    /**
+     * @param includeSchedule 是否连课表一起刷。手动点「同步」传 true；
+     *   自动同步看设置里的开关，默认只拉作业和考试。
+     */
+    fun startSync(includeSchedule: Boolean = true) {
         if (syncing) return
         syncing = true
         syncText = "准备同步…"
         scope.launch {
             runCatching {
-                ChaoxingClient.sync(context) { label, _ ->
+                ChaoxingClient.sync(context, includeSchedule) { label, _ ->
                     handler.post { syncText = label }
                 }
             }.onSuccess { report ->
-                val summary = "课程 ${report.courses} 门 · 作业 ${report.tasks} 条 · 考试 ${report.exams} 场"
+                val summary = buildList {
+                    if (report.scheduleSynced) add("课程 ${report.courses} 门")
+                    add("作业 ${report.tasks} 条")
+                    add("考试 ${report.exams} 场")
+                }.joinToString(" · ")
                 toast(
                     if (report.warnings.isEmpty()) "同步完成：$summary"
                     else "同步完成：$summary（${report.warnings.first()}）"
@@ -216,11 +224,11 @@ fun CampusApp() {
         }
     }
 
-    // 学习通：超过 2 小时没同步过就自动同步一次（没登录、或从没同步过就跳过）
+    // 学习通：满足自动同步条件就静默拉一次。
+    // 条件见 CampusStore.shouldAutoSync：开关打开 + 距上次 2 小时 + 90 天内有作业/考试。
     LaunchedEffect(Unit) {
-        val xxt = CampusStore.xxt
-        if (xxt.loggedIn && xxt.lastSync > 0 && System.currentTimeMillis() - xxt.lastSync >= STALE_MS) {
-            startSync()
+        if (CampusStore.shouldAutoSync()) {
+            startSync(includeSchedule = CampusStore.settings.autoSyncSchedule)
         }
     }
 
