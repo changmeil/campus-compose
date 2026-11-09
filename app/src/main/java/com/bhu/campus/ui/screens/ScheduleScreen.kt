@@ -65,6 +65,7 @@ fun ScheduleScreen(
     contentPadding: PaddingValues,
     onAddCourse: (Int, Int) -> Unit,
     onEditCourse: (Course) -> Unit,
+    onImport: () -> Unit,
 ) {
     val courses = CampusStore.courses
     val settings = CampusStore.settings
@@ -92,6 +93,7 @@ fun ScheduleScreen(
             onPrev = { weekOffset -= 1 },
             onNext = { weekOffset += 1 },
             onToday = { weekOffset = 0 },
+            onImport = onImport,
         )
 
         if (weekCourses.isEmpty()) {
@@ -143,6 +145,7 @@ private fun WeekBar(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit,
+    onImport: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -183,6 +186,7 @@ private fun WeekBar(
         if (!isCurrentWeek) {
             TextButton(text = "回到本周", onClick = onToday)
         }
+        TextButton(text = "导入", onClick = onImport)
     }
 }
 

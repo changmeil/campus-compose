@@ -111,6 +111,7 @@ fun CampusApp() {
     }
 
     var showCourseDialog by remember { mutableStateOf(false) }
+    var showImport by remember { mutableStateOf(false) }
     var editingCourse by remember { mutableStateOf<Course?>(null) }
     var draftWeekday by remember { mutableIntStateOf(LocalDate.now().dayOfWeek.value) }
     var draftStart by remember { mutableIntStateOf(1) }
@@ -356,6 +357,7 @@ fun CampusApp() {
                             editingCourse = course
                             showCourseDialog = true
                         },
+                        onImport = { showImport = true },
                     )
 
                     2 -> TasksScreen(
@@ -413,6 +415,19 @@ fun CampusApp() {
                     CampusStore.deleteCourse(course.id)
                     showCourseDialog = false
                     toast("已删除")
+                },
+            )
+        }
+
+        if (showImport) {
+            WakeupImportDialog(
+                onDismiss = { showImport = false },
+                onImport = { list, monday, replace ->
+                    CampusStore.importCourses(list, monday, replace)
+                    showImport = false
+                    toast(
+                        "已导入 ${list.size} 门课" + if (replace) "（覆盖原课表）" else "（追加）"
+                    )
                 },
             )
         }

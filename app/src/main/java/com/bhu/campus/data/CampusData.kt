@@ -15,6 +15,7 @@ import java.util.UUID
 const val SOURCE_MANUAL = "manual"
 const val SOURCE_XXT = "chaoxing"
 const val SOURCE_DEMO = "demo"
+const val SOURCE_WAKEUP = "wakeup"
 
 /**
  * 一台打水设备的二维码（简称「预设」）。
@@ -465,6 +466,20 @@ object CampusStore {
 
     fun deleteCourse(id: String) {
         courses = courses.filterNot { it.id == id }
+        persist()
+    }
+
+    /**
+     * 从 WakeUp 导入课表。
+     *
+     * @param replace true 覆盖现有课表，false 追加在后面
+     * @param firstMonday 课表第一周的周一（epochDay），用来校准「学期起始日」；null 表示不动
+     */
+    fun importCourses(imported: List<Course>, firstMonday: Long?, replace: Boolean) {
+        courses = if (replace) imported else courses + imported
+        if (firstMonday != null) {
+            settings = settings.copy(semesterStart = firstMonday)
+        }
         persist()
     }
 
