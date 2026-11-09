@@ -106,6 +106,14 @@ data class AppSettings(
      * 空表示用 [DEFAULT_SECTION_TIMES]；导入 WakeUp 时按 ICS 里的真实时间自动校准。
      */
     val sectionTimes: List<String> = emptyList(),
+    /** 打开 App 时自动同步学习通（作业、考试，必要时连课表）。 */
+    val autoSync: Boolean = true,
+    /**
+     * 自动同步时是否连课表一起刷新。默认关：课表一学期基本不变，
+     * 每次打开都重拉一遍既慢又容易把导入好的课表覆盖掉。
+     * 手动点「同步」时不受这个开关限制，永远是全量。
+     */
+    val autoSyncSchedule: Boolean = false,
 ) {
     /** 实际生效的作息表（总是 12 项）。 */
     val effectiveSectionTimes: List<Pair<LocalTime, LocalTime>>
@@ -147,6 +155,14 @@ data class XxtState(
 object CampusStore {
 
     private const val PREFS = "campus_v2"
+
+    /** 距上次同步至少这么久才自动再拉一次。 */
+    private const val AUTO_SYNC_STALE_MS = 2 * 3600_000L
+
+    /** 自动同步看多远：90 天内没有作业/考试就不用拉了。 */
+    private const val TODO_HORIZON_DAYS = 90L
+
+    private const val DAY_MS = 86_400_000L
 
     private lateinit var prefs: SharedPreferences
 
@@ -298,23 +314,30 @@ object CampusStore {
     /* ---------------- 课程 ---------------- */
 
     /**
-     * 同名、同老师、同节次的课并成一条：周次取并集，教室拼起来（最多两个）。
+     * 同名、同节次的课并成一条：周次取并集，教室和老师各自拼起来。
      *
-     * 起因是导入 WakeUp 的 ICS 时把教室带进了合并键，教务里同一门课挂了两间教室
-     * （或换过教室）就会裂成两条——课表格子里两个块完全叠住，只露出上面那条，
-     * 今日页却会把两条都列出来，看着像"今天上了两遍同一门课"。
+     * 合并键**只用课名 + 星期 + 节次**，不带教室也不带老师——这两个字段不同来源给的
+     * 口径不一样：
+     * - 教务里同一门课挂了两间教室（C505 / A109），带教室就裂成两条；
+     * - WakeUp 的 ICS 通常没有教师字段（老师在 LOCATION 里），学习通却有，
+     *   带老师就变成「有老师的一条 + 没老师的一条」，两边同时存在时今日页列两遍。
      */
     private fun mergeDuplicateCourses(list: List<Course>): List<Course> {
         val out = LinkedHashMap<String, Course>()
         list.forEach { raw ->
             // 顺手把老数据里「教室 老师」这种脏地点洗干净
             val course = raw.copy(location = WakeupImport.stripTeacher(raw.location, raw.teacher))
-            val key = "${course.name}|${course.teacher}|${course.weekday}|${course.start}|${course.end}"
+            val key = "${course.name}|${course.weekday}|${course.start}|${course.end}"
             val old = out[key]
             out[key] = if (old == null) {
                 course
             } else {
-                val places = (old.location.split(" / ") + course.location)
+                val places = (old.location.split(" / ") + course.location.split(" / "))
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .take(2)
+                val teachers = listOf(old.teacher, course.teacher)
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
                     .distinct()
@@ -322,6 +345,7 @@ object CampusStore {
                 old.copy(
                     weeks = (old.weeks + course.weeks).distinct().sorted(),
                     location = places.joinToString(" / "),
+                    teacher = teachers.joinToString(" / "),
                 )
             }
         }
@@ -404,11 +428,33 @@ object CampusStore {
         persist()
     }
 
+    /* ---------------- 自动同步判定 ---------------- */
+
+    /**
+     * 打开 App 时该不该自动同步学习通。
+     *
+     * 四个条件都满足才拉：开关打开、已登录同步过、距上次超过 2 小时、
+     * **90 天内有未完成的作业或考试**。最后一条是用户提的：假期里（或学期末作业都交完）
+     * 再自动同步也拉不到新东西，白白耗流量和几秒钟。
+     *
+     * 手动点「同步」不受这里限制，随时能全量刷。
+     */
+    fun shouldAutoSync(now: Long = System.currentTimeMillis()): Boolean {
+        if (!settings.autoSync) return false
+        if (!xxt.loggedIn || xxt.lastSync <= 0L) return false
+        if (now - xxt.lastSync < AUTO_SYNC_STALE_MS) return false
+        val horizon = now + TODO_HORIZON_DAYS * DAY_MS
+        // dueAt 为空的多半是没解析到截止时间的作业，算「还在进行」，保守当作有待办
+        return tasks.any { !it.done && (it.dueAt == null || it.dueAt <= horizon) }
+    }
+
     /* ---------------- 学习通同步写入 ---------------- */
 
     fun replaceSyncedCourses(list: List<Course>) {
+        // 学习通同步只换掉上次同步的那批，手工课和 WakeUp 导入的留着；
+        // 但同一门课两边都有时必须并成一条，否则今日页会把课列两遍。
         val manual = courses.filter { it.source != SOURCE_XXT }
-        courses = manual + list
+        courses = mergeDuplicateCourses(manual + list)
         persist()
     }
 
@@ -553,6 +599,8 @@ object CampusStore {
         .put("energyOrder", JSONArray(s.energyOrder))
         .put("scheduleSource", s.scheduleSource)
         .put("sectionTimes", JSONArray(s.sectionTimes))
+        .put("autoSync", s.autoSync)
+        .put("autoSyncSchedule", s.autoSyncSchedule)
         .toString()
 
     private fun decodeSettings(raw: String?): AppSettings {
@@ -575,6 +623,8 @@ object CampusStore {
                     else -> SCHEDULE_XXT
                 },
                 sectionTimes = stringList(o.optJSONArray("sectionTimes")),
+                autoSync = o.optBoolean("autoSync", true),
+                autoSyncSchedule = o.optBoolean("autoSyncSchedule", false),
             )
         }.getOrDefault(AppSettings())
     }
