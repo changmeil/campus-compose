@@ -29,6 +29,7 @@ shot-*.png
 .DS_Store
 Thumbs.db
 
-# 注意：keystore/campus.jks 是故意提交的——签名密钥一旦丢了两台手机都得卸载重装，
-# 而且以后 OTA 升级要求签名一致。如果哪天要推到 GitHub，先把这行取消注释。
-# keystore/
+# ---- 签名密钥 ----
+# 本地一直留着 keystore/campus.jks（签名一旦换了，两台手机都得卸载重装），
+# 但仓库已经推到 GitHub，密钥不再入库。换机器/重装系统请单独备份这个文件。
+keystore/

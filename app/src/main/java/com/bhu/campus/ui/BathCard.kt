@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -37,6 +38,7 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.bhu.campus.data.CampusStore
+import com.bhu.campus.data.IslandHub
 import com.bhu.campus.data.WaterClass
 import com.bhu.campus.data.WaterClient
 import com.bhu.campus.data.WaterCost
@@ -53,6 +55,7 @@ import com.bhu.campus.data.formatDateTimeShort
 fun BathCard(onMessage: (String) -> Unit) {
     val card = CampusStore.waterCard
     val snapshot = CampusStore.bath
+    val context = LocalContext.current
 
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -88,6 +91,10 @@ fun BathCard(onMessage: (String) -> Unit) {
                 .onSuccess { r ->
                     if (r.ok) {
                         CampusStore.patchBathClass(target.no, true, r.code)
+                        // 预约码要站着门口翻 App 找太麻烦，直接挂到岛上
+                        if (r.code.isNotBlank()) {
+                            IslandHub.bathCode(context, r.code, target.name)
+                        }
                         onMessage(r.message.ifBlank { "预约码 " + r.code })
                     } else {
                         onMessage(r.message)
@@ -106,6 +113,7 @@ fun BathCard(onMessage: (String) -> Unit) {
                 .onSuccess { r ->
                     if (r.ok) {
                         CampusStore.patchBathClass(target.no, false, "")
+                        IslandHub.dismiss(context)
                         onMessage("已取消预约")
                     } else {
                         onMessage(r.message)

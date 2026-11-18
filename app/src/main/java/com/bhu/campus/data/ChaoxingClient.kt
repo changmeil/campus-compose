@@ -264,8 +264,7 @@ object ChaoxingClient {
     }
 
     /** 逐周拉全学期，聚合同一节课的周次。 */
-    fun fetchFullSchedule(onProgress: (String, Float) -> Unit): Pair<Curriculum, List<Course>> {
-        onProgress("读取课表信息…", 0.05f)
+    fun fetchFullSchedule(onProgress: (String, Float) -> Unit): Pair<Curriculum, List<Course>> {        onProgress("读取课表信息…", 0.05f)
         val first = requestWeek(null)
         val curriculum = first.curriculum
         val merged = linkedMapOf<String, MutableMap<String, Any>>()
@@ -304,7 +303,12 @@ object ChaoxingClient {
                     )
                 }
                 @Suppress("UNCHECKED_CAST")
-                (slot["weeks"] as MutableList<Int>).add(week)
+                val bucket = slot["weeks"] as MutableList<Int>
+                // 每条 lesson 自带 weeks（"11" / "1-16" / "1,3,5"）。它才是服务端认定的
+                // 周次，比「按请求的周反推」可靠：万一 week 参数没生效、服务端每次都返回
+                // 当周，反推会把同一节课记成全学期都在上，格子就和别的周混在一起了。
+                val declared = parseWeeks(les.optString("weeks"))
+                if (declared.isEmpty()) bucket.add(week) else bucket.addAll(declared)
             }
         }
 
@@ -332,6 +336,31 @@ object ChaoxingClient {
         }.sortedWith(compareBy({ it.weekday }, { it.start }))
 
         return curriculum to courses
+    }
+
+    /**
+     * 解析课表接口 lesson 里的周次串。
+     *
+     * 见过三种写法：单周 `"11"`、区间 `"1-16"`、枚举 `"1,3,5,7"`，也可能混着
+     * （`"1-8,10-16"`）。解析不出来就返回空集合，调用方退回按请求周记录。
+     */
+    private fun parseWeeks(raw: String): Set<Int> {
+        val v = raw.trim()
+        if (v.isEmpty()) return emptySet()
+        val out = mutableSetOf<Int>()
+        v.split(',', '，', '、', ' ').forEach { part ->
+            val p = part.trim()
+            if (p.isEmpty()) return@forEach
+            if (p.contains('-')) {
+                val seg = p.split('-', limit = 2)
+                val a = seg.getOrNull(0)?.trim()?.toIntOrNull()
+                val b = seg.getOrNull(1)?.trim()?.toIntOrNull()
+                if (a != null && b != null && a in 1..30 && b in a..30) out += a..b
+            } else {
+                p.toIntOrNull()?.takeIf { it in 1..30 }?.let { out += it }
+            }
+        }
+        return out
     }
 
     private fun colorFor(name: String): Int {

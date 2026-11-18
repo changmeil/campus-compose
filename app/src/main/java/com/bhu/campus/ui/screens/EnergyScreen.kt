@@ -1,5 +1,6 @@
 package com.bhu.campus.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +55,7 @@ import com.bhu.campus.ui.CardPadding
 import com.bhu.campus.ui.LabeledValue
 import com.bhu.campus.ui.Pill
 import com.bhu.campus.ui.ReorderableColumn
+import com.bhu.campus.ui.WashRoomCard
 import com.bhu.campus.ui.WaterPresetRow
 import com.bhu.campus.ui.rememberAlipayEntry
 
@@ -68,6 +70,12 @@ import com.bhu.campus.ui.rememberAlipayEntry
 fun EnergyScreen(
     contentPadding: PaddingValues,
     onMessage: (String) -> Unit,
+    ujingBusy: Boolean = false,
+    onUjingLogin: () -> Unit = {},
+    onUjingRefresh: () -> Unit = {},
+    onUjingManage: () -> Unit = {},
+    onUjingWash: () -> Unit = {},
+    onUjingReserve: (com.bhu.campus.data.Ujing.DeviceStatus) -> Unit = {},
 ) {
     val settings = CampusStore.settings
     val snapshot = CampusStore.energy
@@ -82,11 +90,14 @@ fun EnergyScreen(
     var showDrinkHelp by remember { mutableStateOf(false) }
     val alipayEntry = rememberAlipayEntry(onMessage)
     val context = LocalContext.current
+    // 装/更新 APK 后 Android 会把无障碍服务关掉（系统的安全行为），既不报错也不提示。
+    // 不显眼说一句，用户只会觉得「怎么又不自动读了」。
+    var serviceOn by remember { mutableStateOf(DrinkBalance.isEnabled(context)) }
     val drinkBalance = CampusStore.drinkBalance
     val drinkBalanceAt = CampusStore.drinkBalanceAt
 
     val configured = building.isNotBlank() && room.isNotBlank()
-    val order = arrangeOrder(settings.energyOrder, listOf("energy", "water", "bath"))
+    val order = arrangeOrder(settings.energyOrder, listOf("energy", "water", "wash", "bath"))
 
     fun refresh() {
         if (loading) return
@@ -207,9 +218,10 @@ fun EnergyScreen(
                         )
                         Spacer(Modifier.weight(1f))
                         TextButton(
-                            text = "读取",
+                            text = "去社慧通",
                             onClick = {
-                                if (!DrinkBalance.isEnabled(context)) {
+                                serviceOn = DrinkBalance.isEnabled(context)
+                                if (!serviceOn) {
                                     showDrinkHelp = true
                                 } else if (!AlipayMiniApp.openShetong(context)) {
                                     onMessage("没能打开支付宝，请确认已安装")
@@ -218,9 +230,32 @@ fun EnergyScreen(
                         )
                     }
 
+                    if (!serviceOn) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFB26A00).copy(alpha = 0.16f))
+                                .clickable {
+                                    serviceOn = DrinkBalance.isEnabled(context)
+                                    if (!serviceOn) showDrinkHelp = true
+                                }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                text = "自动记录已关闭 · 点这里打开（装新版本后系统会关掉它）",
+                                fontSize = 11.sp,
+                                color = Color(0xFFD08A28),
+                            )
+                        }
+                    }
+
                     if (drinkBalance == null) {
                         Text(
-                            text = "点右上「读取」打开社慧通小程序，余额会自己记下来。",
+                            text = "打水时进一次社慧通首页就会自动记下余额，不用特意来读。" +
+                                "想现在看，点右上「去社慧通」。",
                             fontSize = 11.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                             modifier = Modifier.padding(top = 4.dp),
@@ -244,7 +279,7 @@ fun EnergyScreen(
                             )
                             Spacer(Modifier.weight(1f))
                             Text(
-                                text = formatDateTimeShort(drinkBalanceAt) + " 读取",
+                                text = formatDateTimeShort(drinkBalanceAt) + " 更新",
                                 fontSize = 10.sp,
                                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                             )
@@ -269,12 +304,21 @@ fun EnergyScreen(
                 }
             }
 
+            "wash" -> WashRoomCard(
+                busy = ujingBusy,
+                onLogin = onUjingLogin,
+                onRefresh = onUjingRefresh,
+                onManage = onUjingManage,
+                onWash = onUjingWash,
+                onReserve = onUjingReserve,
+            )
+
             "bath" -> BathCard(onMessage = onMessage)
                 }
             }
 
             Text(
-                text = "电费、洗浴来自学校平台；只在点查询时访问，结果只存在本机。",
+                text = "电费、洗浴来自学校平台，洗衣来自 U净；都只在你点查询时访问，结果存在本机。",
                 fontSize = 10.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 modifier = Modifier.padding(horizontal = 4.dp),
@@ -332,7 +376,7 @@ private fun DrinkBalanceHelpDialog(
 ) {
     OverlayDialog(
         show = true,
-        title = "读取打水余额",
+        title = "打水余额怎么来的",
         onDismissRequest = onDismiss,
     ) {
         Column(
@@ -340,8 +384,8 @@ private fun DrinkBalanceHelpDialog(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                text = "打水余额在支付宝「社慧通」小程序里，没有对外的查询接口。所以只能这样读：" +
-                    "小程序页面出现时，把屏幕上那个「余额 ￥36.85」记下来。",
+                text = "打水余额在支付宝「社慧通」小程序里，没有对外的查询接口，只能看屏幕：" +
+                    "社慧通首页出现时，把那个「余额 ￥36.85」记下来。全程自动，打一次水就更新一次。",
                 fontSize = 12.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
             )

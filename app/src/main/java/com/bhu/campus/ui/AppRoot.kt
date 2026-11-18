@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -58,6 +60,9 @@ import com.bhu.campus.ChaoxingLoginActivity
 import com.bhu.campus.data.CampusStore
 import com.bhu.campus.data.ChaoxingClient
 import com.bhu.campus.data.Course
+import com.bhu.campus.data.IslandAlerts
+import com.bhu.campus.data.IslandHub
+import com.bhu.campus.data.Ujing
 import com.bhu.campus.data.EnergySync
 import com.bhu.campus.data.TaskItem
 import com.bhu.campus.data.WeatherClient
@@ -124,6 +129,122 @@ fun CampusApp() {
     var syncText by remember { mutableStateOf("") }
     var energyRefreshing by remember { mutableStateOf(false) }
 
+    var showUjingLogin by remember { mutableStateOf(false) }
+    var showUjingAdd by remember { mutableStateOf(false) }
+    var showUjingManage by remember { mutableStateOf(false) }
+    var showUjingWash by remember { mutableStateOf(false) }
+    var ujingReserveDevice by remember { mutableStateOf<Ujing.DeviceStatus?>(null) }
+    var ujingBusy by remember { mutableStateOf(false) }
+
+    /**
+     * 查一次当前订单，决定卡片和岛上显示到哪一步了。
+     *
+     * 以前只查 `orders/running`，而它只回「运行中」那批 —— 付完钱还没启动的单
+     * 根本不在这里面，于是岛上一直停在「待支付」，谁也看不到机器到底转没转、
+     * 还有多久结束。现在改成以 `orders/{id}/detail` 为准：状态码直接告诉我们是
+     * 已支付、自洁中还是洗涤中，剩余时间也由它给。
+     *
+     * 没有订单号时（别人下单、或老版本没存）再退回 running 去发现订单。
+     * 只在真有订单时动岛——没有订单就不碰，免得把洗澡的预约码岛清掉。
+     */
+    suspend fun applyOrderIsland(session: Ujing.Session) {
+        var id = CampusStore.ujing.orderId
+        if (id.isBlank()) {
+            // 没有记录（别人下的单、或老版本没存）：去 running 里捞一个补上
+            val (running, _) = Ujing.runningOrders(session)
+            val first = running.firstOrNull {
+                !it.statusText.contains("完成") && !it.statusText.contains("取消")
+            } ?: return
+            id = first.id
+            CampusStore.setUjingOrderId(id)
+        }
+
+        val (detail, err) = Ujing.orderDetail(session, id)
+        if (detail == null) {
+            if (err.isNotBlank()) Log.w("CampusIsland", "detail $id: $err")
+            return
+        }
+
+        CampusStore.setUjingOrderNow(detail)
+        val label = detail.label.ifBlank { "洗衣机" }
+
+        if (detail.ended) {
+            // 洗完了就留句话在岛上（10 分钟自己收）；超时/取消/失败则直接撤掉
+            if (detail.status == Ujing.OrderStatus.DONE) {
+                IslandHub.washDone(context, label)
+            } else {
+                IslandHub.dismissWash(context)
+            }
+            CampusStore.setUjingOrderId("")
+            return
+        }
+
+        when (detail.status) {
+            Ujing.OrderStatus.BOOKED -> IslandHub.wash(
+                context,
+                IslandHub.WashPhase.WAIT_PAY,
+                label,
+                System.currentTimeMillis() +
+                    (detail.remainSeconds.takeIf { it > 0 } ?: 180) * 1000L,
+            )
+
+            Ujing.OrderStatus.PAID, Ujing.OrderStatus.PROTECT -> IslandHub.wash(
+                context,
+                IslandHub.WashPhase.PAID,
+                label,
+            )
+
+            Ujing.OrderStatus.SELF_CLEAN_START, Ujing.OrderStatus.SELF_CLEANING -> IslandHub.wash(
+                context,
+                IslandHub.WashPhase.SELF_CLEAN,
+                label,
+                System.currentTimeMillis() + (detail.remainSeconds.takeIf { it > 0 } ?: 180) * 1000L,
+            )
+
+            Ujing.OrderStatus.SELF_CLEAN_DONE -> IslandHub.wash(
+                context,
+                IslandHub.WashPhase.READY,
+                label,
+                System.currentTimeMillis() + (detail.remainSeconds.takeIf { it > 0 } ?: 300) * 1000L,
+            )
+
+            Ujing.OrderStatus.STARTING, Ujing.OrderStatus.LIQUID,
+            Ujing.OrderStatus.RUNNING, Ujing.OrderStatus.FAULT,
+            -> {
+                val remain = detail.remainSeconds
+                IslandHub.wash(
+                    context,
+                    IslandHub.WashPhase.RUNNING,
+                    label,
+                    if (remain > 0) System.currentTimeMillis() + remain * 1000L else 0L,
+                    rightText = if (remain > 0) "" else "进行中",
+                )
+            }
+        }
+    }
+
+    /** 挨个复查已绑定的机器。谁失败了只在全都失败时把原因显示出来。 */
+    fun refreshUjing() {
+        val ujing = CampusStore.ujing
+        if (!ujing.loggedIn || ujing.bindings.isEmpty() || ujingBusy) return
+        ujingBusy = true
+        scope.launch {
+            val session = Ujing.Session(ujing.mobile, ujing.token)
+            val out = mutableListOf<Ujing.DeviceStatus>()
+            var firstError = ""
+            ujing.bindings.forEach { binding ->
+                val (status, err) = Ujing.scanWasher(binding.qrCode, session)
+                if (status != null) out += status else if (firstError.isBlank()) firstError = err
+            }
+            CampusStore.setUjingDevices(
+                out,
+                if (out.isEmpty()) firstError else "",
+            )
+            ujingBusy = false
+            applyOrderIsland(session)
+        }
+    }
+
     fun toast(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
@@ -178,6 +299,25 @@ fun CampusApp() {
         if (granted) refreshWeather(force = true)
     }
 
+    /**
+     * 付完钱自动把洗衣对话框推到面前。
+     *
+     * 付款是在 U净 小程序 / 微信里完成的，回到 App 时机器其实已经在等启动 ——
+     * 这一步不做，用户看到「已支付」也不知道该点哪儿，机器空等到订单超时。
+     * 同一张单只自动弹一次，弹过之后由用户自己点卡片上的「去启动」。
+     */
+    var autoOpenedOrderId by remember { mutableStateOf("") }
+    LaunchedEffect(CampusStore.ujingOrder?.orderId, CampusStore.ujingOrder?.status) {
+        val order = CampusStore.ujingOrder ?: return@LaunchedEffect
+        if (order.status != Ujing.OrderStatus.PAID) return@LaunchedEffect
+        if (autoOpenedOrderId == order.orderId) return@LaunchedEffect
+        val device = CampusStore.ujingDevices.firstOrNull { it.orderId.isNotBlank() }
+            ?: return@LaunchedEffect
+        autoOpenedOrderId = order.orderId
+        ujingReserveDevice = device
+        goToPage(3)
+    }
+
     // 天气：先读本地缓存立刻显示，再按当前位置刷新（缓存不到 2 小时就不打网络）
     LaunchedEffect(Unit) {
         WeatherClient.load(context)
@@ -230,6 +370,31 @@ fun CampusApp() {
         if (CampusStore.shouldAutoSync()) {
             startSync(includeSchedule = CampusStore.settings.autoSyncSchedule)
         }
+    }
+
+    // 洗衣房状态：打开就看一眼，省得进 App 再点一次刷新
+    LaunchedEffect(Unit) {
+        refreshUjing()
+    }
+
+    // 洗衣订单轮询：付款是在微信里完成的，App 根本收不到回调，付完人就走开了。
+    // 只有定时查一次，才知道机器到底开始洗没有——卡片和岛也就跟着从「待支付」
+    // 走到「待启动」→「自洁中」→「洗涤中」。
+    // 跟着单子时 15 秒一次（自洁结束后只有 5 分钟启动窗口，慢了就错过），没单子时 60 秒。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(if (CampusStore.ujing.orderId.isNotBlank()) 15_000L else 60_000L)
+            val ujing = CampusStore.ujing
+            if (!ujing.loggedIn) continue
+            runCatching { applyOrderIsland(Ujing.Session(ujing.mobile, ujing.token)) }
+        }
+    }
+
+    // 超级岛：先把倒计时循环拉起来（无障碍服务开着的话进程常驻，循环就不会停），
+    // 再看一眼有没有该提醒的作业/余额。
+    LaunchedEffect(Unit) {
+        IslandHub.attach(context)
+        IslandAlerts.check(context)
     }
 
     val loginLauncher = rememberLauncherForActivityResult(
@@ -381,6 +546,12 @@ fun CampusApp() {
                     else -> EnergyScreen(
                         contentPadding = innerPadding,
                         onMessage = { toast(it) },
+                        ujingBusy = ujingBusy,
+                        onUjingLogin = { showUjingLogin = true },
+                        onUjingRefresh = { refreshUjing() },
+                        onUjingManage = { showUjingManage = true },
+                        onUjingWash = { showUjingWash = true },
+                        onUjingReserve = { ujingReserveDevice = it },
                     )
                 }
             }
@@ -441,6 +612,58 @@ fun CampusApp() {
                     }
                     toast("已导入 ${list.size} 门课$suffix")
                 },
+            )
+        }
+
+        if (showUjingLogin) {
+            UjingLoginDialog(
+                onDismiss = { showUjingLogin = false },
+                onSuccess = {
+                    showUjingLogin = false
+                    // 刚登录完手里通常还没有机器，直接把「添加」推出来
+                    if (CampusStore.ujing.bindings.isEmpty()) showUjingAdd = true else refreshUjing()
+                },
+            )
+        }
+
+        if (showUjingAdd) {
+            UjingAddDeviceDialog(
+                onDismiss = { showUjingAdd = false },
+                onAdded = {
+                    showUjingAdd = false
+                    refreshUjing()
+                },
+            )
+        }
+
+        if (showUjingManage) {
+            UjingManageDialog(
+                onDismiss = { showUjingManage = false },
+                onAdd = {
+                    showUjingManage = false
+                    showUjingAdd = true
+                },
+                onLogout = {
+                    CampusStore.logoutUjing()
+                    showUjingManage = false
+                    toast("已退出 U净")
+                },
+                onOpenWash = {
+                    showUjingManage = false
+                    showUjingWash = true
+                },
+            )
+        }
+
+        if (showUjingWash) {
+            UjingWashDialog(onDismiss = { showUjingWash = false })
+        }
+
+        ujingReserveDevice?.let { device ->
+            UjingReserveDialog(
+                device = device,
+                onDismiss = { ujingReserveDevice = null },
+                onReserved = { refreshUjing() },
             )
         }
 

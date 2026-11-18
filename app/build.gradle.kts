@@ -13,8 +13,20 @@ android {
         applicationId = "com.bhu.campus"
         minSdk = 26
         targetSdk = 37
-        versionCode = 83
-        versionName = "5.17.7"
+        versionCode = 112
+        versionName = "5.27.0"
+
+        // ML Kit 的条形码引擎是 native 的，四个 ABI 各一份 libbarhopper_v3.so，
+        // 一份 3~6MB。全打进去白占 20MB，而真机（arm64）只认自己那一份。
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // Compose / AndroidX 自带几十种语言的字符串，只留中文和英文，
+    // 顺带把 resources.arsc 里那些语言索引也削掉。
+    androidResources {
+        localeFilters += listOf("zh", "en")
     }
 
     signingConfigs {
@@ -31,6 +43,14 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("local")
+            // 之前 release 是「原样打包」，Compose 的 dex 一点没瘦 —— 光代码就 25MB 未压缩。
+            // 开 R8 + 资源压缩后 dex 大约能砍一半。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
         debug {
             signingConfig = signingConfigs.getByName("local")

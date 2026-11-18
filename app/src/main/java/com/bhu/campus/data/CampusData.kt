@@ -160,6 +160,29 @@ data class XxtState(
     val hasSynced: Boolean get() = lastSync > 0
 }
 
+/** 用户绑的一台洗衣机：扫一次码记下来，之后打开 App 直接复查这几台。 */
+data class UjingBinding(
+    val qrCode: String,
+    /** 用户起的名字，空着就显示设备码后 6 位 */
+    val label: String = "",
+)
+
+data class UjingState(
+    val mobile: String = "",
+    val token: String = "",
+    val bindings: List<UjingBinding> = emptyList(),
+    /**
+     * 正在跟的那张洗衣单。
+     *
+     * 建单时记下来，之后一直拿它查 `orders/{id}/detail`。
+     * 光靠 `orders/running` 是不够的 —— 已支付待启动的单不在 running 里，
+     * 岛就会一直停在「待支付」，看不到机器到底转到哪一步。
+     */
+    val orderId: String = "",
+) {
+    val loggedIn: Boolean get() = token.isNotBlank()
+}
+
 /* ------------------------------------------------------------------ */
 /*  Store：单例 + JSON 持久化（SharedPreferences），并在 Compose 中可观察  */
 /* ------------------------------------------------------------------ */
@@ -193,6 +216,22 @@ object CampusStore {
         private set
     var xxt by mutableStateOf(XxtState())
         private set
+    /** U净 洗衣：登录态 + 绑定的机器。 */
+    var ujing by mutableStateOf(UjingState())
+        private set
+    /** 刚查回来的设备状态，不持久化，每次打开重新拉。 */
+    var ujingDevices by mutableStateOf<List<Ujing.DeviceStatus>>(emptyList())
+        private set
+    /** 查设备时的人话错误，界面上直接显示。 */
+    var ujingError by mutableStateOf("")
+        private set
+    /**
+     * 当前这张洗衣单的最新状态（不持久化，靠轮询刷）。
+     *
+     * 卡片和岛都读它：付了没、机器在自洁还是在洗、还剩多久。
+     */
+    var ujingOrder by mutableStateOf<Ujing.OrderDetail?>(null)
+        private set
     /** 今日天气，只用于 Compose 观察；持久化在 WeatherClient 自己的 prefs 里。 */
     var weather by mutableStateOf<WeatherInfo?>(null)
         private set
@@ -208,9 +247,12 @@ object CampusStore {
     /** 社慧通账户里的打水余额，靠无障碍读小程序首页那个数字拿到；null 表示还没读到过。 */
     var drinkBalance by mutableStateOf<Double?>(null)
         private set
-    /** 上面那个余额是什么时候读到的。 */
+    /** 上面那个余额是什么时候读到的（看清楚，是「最近一次看到」而不是「最近一次变化」）。 */
     var drinkBalanceAt by mutableStateOf(0L)
         private set
+
+    /** 余额没变化时也刷新时间戳，但不值得每次都写盘，用这个限流。 */
+    private var drinkBalanceSavedAt = 0L
 
     fun init(context: Context) {
         if (::prefs.isInitialized) return
@@ -233,6 +275,7 @@ object CampusStore {
         energy = decodeEnergy(prefs.getString("energy", null))
         history = decodeHistory(prefs.getString("history", null))
         xxt = decodeXxt(prefs.getString("xxt", null))
+        ujing = decodeUjing(prefs.getString("ujing", null))
         val stored = decodeWaterQrs(prefs.getString("waterQrs", null))
         // 老版本只存了一条 waterQr，这里把它升级成第一台预设（先赋值再落盘，别把老数据写没了）
         val legacy = if (stored.isEmpty()) decodeLegacyWaterQr() else null
@@ -249,25 +292,31 @@ object CampusStore {
 
     /* ---------------- 打水余额（无障碍读屏） ---------------- */
 
+    /** 余额读数写盘的最小间隔。数值不变时只更新时间戳，10 秒写一次就够。 */
+    private const val SAVE_INTERVAL = 10_000L
+
     /**
      * 无障碍服务在社慧通小程序首页读到余额后调这里。
      *
-     * 读数相同就不重复落盘，避免小程序页面每次重绘都写一遍。
+     * 每次读到都会更新「看到的时间」，数值变了才保证落盘（数值不变按 10 秒限流），
+     * 避免小程序页面每次重绘都写一遍磁盘。
      */
     fun recordDrinkBalance(value: Double): Boolean {
         if (value < 0) return false
+        val now = System.currentTimeMillis()
         val current = drinkBalance
-        // 一分钟内读到同一个数就不重复落盘；小程序页面每次重绘都会来一遍
-        if (current != null && kotlin.math.abs(current - value) < 0.005 &&
-            System.currentTimeMillis() - drinkBalanceAt < 60_000
-        ) {
-            return false
-        }
+        // 就算数额没变，也要把「看到它的时间」推新：否则用户今天刚打水，
+        // 卡片上还挂着上周的时间，看起来像坏数据。
         drinkBalance = value
-        drinkBalanceAt = System.currentTimeMillis()
+        drinkBalanceAt = now
+
+        val unchanged = current != null && kotlin.math.abs(current - value) < 0.005
+        if (unchanged && now - drinkBalanceSavedAt < SAVE_INTERVAL) return false
+
+        drinkBalanceSavedAt = now
         prefs.edit()
             .putString("drinkBalance", value.toString())
-            .putLong("drinkBalanceAt", drinkBalanceAt)
+            .putLong("drinkBalanceAt", now)
             .apply()
         return true
     }
@@ -489,6 +538,7 @@ object CampusStore {
             .putString("energy", energy?.let(::encodeEnergy))
             .putString("history", encodeHistory(history))
             .putString("xxt", encodeXxt(xxt))
+            .putString("ujing", encodeUjing(ujing))
             .apply()
     }
 
@@ -561,9 +611,9 @@ object CampusStore {
         replace: Boolean,
         sectionTimes: List<Pair<LocalTime, LocalTime>> = emptyList(),
     ) {
-        // 「追加」只保留手工/学习通那部分，上一次导入的 WakeUp 课整批换掉——
-        // 否则重新导入一次，同一门课会在格子里叠两层、今日页列两遍。
-        val kept = if (replace) emptyList() else courses.filterNot { it.source == SOURCE_WAKEUP }
+        // 「追加」只保留手工加的课，上一次导入的 WakeUp 课和同步来的学习通课都
+        // 整批换掉——否则两套课表的同名课会被合并、周次取并集，周次就乱了。
+        val kept = if (replace) emptyList() else courses.filter { it.source == SOURCE_MANUAL }
         courses = mergeDuplicateCourses(kept + imported)
         settings = settings.copy(
             semesterStart = firstMonday ?: settings.semesterStart,
@@ -650,10 +700,14 @@ object CampusStore {
     /* ---------------- 学习通同步写入 ---------------- */
 
     fun replaceSyncedCourses(list: List<Course>) {
-        // 学习通同步只换掉上次同步的那批，手工课和 WakeUp 导入的留着；
-        // 但同一门课两边都有时必须并成一条，否则今日页会把课列两遍。
-        val manual = courses.filter { it.source != SOURCE_XXT }
+        // 同步以学习通为准：只留手工加的课，上次同步的和 WakeUp 导入的整批换掉。
+        //
+        // 之前这里留着「非学习通」的全部课（含上一版 WakeUp 导入），两套课表叠在
+        // 一起，同一门课会命中合并键、周次取并集——「只上到第 8 周」的课就被
+        // 拖到第 11 周还显示。切来源就该切干净。
+        val manual = courses.filter { it.source == SOURCE_MANUAL }
         courses = mergeDuplicateCourses(manual + list)
+        settings = settings.copy(scheduleSource = SCHEDULE_XXT)
         persist()
     }
 
@@ -674,6 +728,54 @@ object CampusStore {
         persist()
     }
 
+    /* ---------------- U净 洗衣 ---------------- */
+
+    fun updateUjing(block: (UjingState) -> UjingState) {
+        ujing = block(ujing)
+        persist()
+    }
+
+    fun addUjingBinding(qrCode: String, label: String = "") {
+        val qr = Ujing.normalizeQr(qrCode)
+        if (qr.isBlank()) return
+        val exists = ujing.bindings.indexOfFirst { it.qrCode == qr }
+        val next = if (exists >= 0) ujing.bindings.toMutableList().also { it[exists] = it[exists].copy(label = label) }
+        else ujing.bindings + UjingBinding(qrCode = qr, label = label)
+        ujing = ujing.copy(bindings = next)
+        persist()
+    }
+
+    fun removeUjingBinding(qrCode: String) {
+        ujing = ujing.copy(bindings = ujing.bindings.filterNot { it.qrCode == qrCode })
+        persist()
+    }
+
+    fun setUjingDevices(list: List<Ujing.DeviceStatus>, error: String = "") {
+        ujingDevices = list
+        ujingError = error
+    }
+
+    /** 记住 / 忘掉正在跟的洗衣单。 */
+    fun setUjingOrderId(orderId: String) {
+        if (ujing.orderId == orderId) return
+        ujing = ujing.copy(orderId = orderId)
+        if (orderId.isBlank()) ujingOrder = null
+        persist()
+    }
+
+    fun setUjingOrderNow(order: Ujing.OrderDetail?) {
+        ujingOrder = order
+    }
+
+    /** 退出登录：token 和机器都清掉，避免账号换了还拿旧 token 去查。 */
+    fun logoutUjing() {
+        ujing = UjingState()
+        ujingDevices = emptyList()
+        ujingError = ""
+        ujingOrder = null
+        persist()
+    }
+
     fun updateWeather(info: WeatherInfo?) {
         weather = info
     }
@@ -684,6 +786,10 @@ object CampusStore {
         energy = null
         history = emptyList()
         xxt = XxtState()
+        ujing = UjingState()
+        ujingDevices = emptyList()
+        ujingError = ""
+        ujingOrder = null
         settings = AppSettings()
         persist()
     }
@@ -904,5 +1010,39 @@ object CampusStore {
                 semesterLabel = o.optString("semesterLabel"),
             )
         }.getOrDefault(XxtState())
+    }
+
+    private fun encodeUjing(s: UjingState): String = JSONObject()
+        .put("mobile", s.mobile)
+        .put("token", s.token)
+        .put("orderId", s.orderId)
+        .put("bindings", JSONArray().also { arr ->
+            s.bindings.forEach { b ->
+                arr.put(JSONObject().put("qrCode", b.qrCode).put("label", b.label))
+            }
+        })
+        .toString()
+
+    private fun decodeUjing(raw: String?): UjingState {
+        if (raw.isNullOrBlank()) return UjingState()
+        return runCatching {
+            val o = JSONObject(raw)
+            val arr = o.optJSONArray("bindings")
+            val list = mutableListOf<UjingBinding>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    val qr = item.optString("qrCode")
+                    if (qr.isBlank()) continue
+                    list += UjingBinding(qrCode = qr, label = item.optString("label"))
+                }
+            }
+            UjingState(
+                mobile = o.optString("mobile"),
+                token = o.optString("token"),
+                bindings = list,
+                orderId = o.optString("orderId"),
+            )
+        }.getOrDefault(UjingState())
     }
 }

@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 超级岛/普通通知（Android 13+ 需要运行时授权） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 天气按当前位置查；只要粗略定位，够用且省电 -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -66,15 +68,16 @@
                 android:resource="@xml/accessibility_service" />
         </service>
 
-        <!-- 内置 Xposed 模块：LSPosed 里勾选「校园一站」，作用域勾「拼多多」。
-             实现在 com.bhu.campus.hook.PddStationHook（assets/xposed_init 指向它），
-             只在拼多多进程里被加载，主界面不受影响。 -->
+        <!-- 内置 Xposed 模块（两个入口，见 assets/xposed_init）：
+             · PddStationHook —— 作用域「拼多多」，驿站取件页直通
+             · IslandAuthHook —— 作用域「系统界面 + 小米服务框架」，放开焦点通知白名单，
+               让本应用发出的超级岛通知不再被 onAuthFailed 拦掉 -->
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="拼多多驿站取件页直通：在「校园一站」点驿站，直接落到该驿站的取件页" />
+            android:value="驿站取件页直通 + 超级岛白名单放开（需在 LSPosed 里勾选拼多多、系统界面、小米服务框架）" />
         <meta-data
             android:name="xposedminversion"
             android:value="82" />
